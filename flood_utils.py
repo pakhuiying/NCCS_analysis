@@ -26,3 +26,7 @@ def get_closest_weather_stn(weather_stns_dict,stn_name):
     diff_dist = [(stn_n,dist_diff(weather_stns_dict[stn_n]['latitude'],weather_stns_dict[stn_n]['longitude'],lat1,lon1)) for stn_n in weather_stns_dict.keys()]
     sorted_dist = list(sorted(diff_dist,key=lambda tup: tup[1]))
     return sorted_dist
+
+def grid_code_drainage_catchment():
+    return {1: 'Jurong', 2: 'Kranji', 3: 'Pandan', 4: 'Woodlands', 5: 'Kallang', 6: 'Bukit Timah'
+            , 7: 'Stamford Marina', 8: 'Singapore River', 9: 'Punggol', 10: 'Geylang', 11: 'Changi'}
