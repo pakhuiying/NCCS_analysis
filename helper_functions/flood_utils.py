@@ -5,8 +5,8 @@ import matplotlib.dates as mdates
 import matplotlib.patches as mpatches
 import os
 import datetime
-import requests
 from osgeo import gdal, ogr
+import requests
 
 def get_weather_stns():
     """ returns weather stations in singapore
@@ -46,6 +46,7 @@ def get_coordinates_from_location(location):
     Returns:
         tuple: strings corresponding to number of results found, search value, lat, and lon
     """
+    
     headers = {"Authorization": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZWY3ZDlhYTRkNDIyMWVjYjA2NzE2MTg0Yjc3MmU5ZCIsImlzcyI6Imh0dHA6Ly9pbnRlcm5hbC1hbGItb20tcHJkZXppdC1pdC0xMjIzNjk4OTkyLmFwLXNvdXRoZWFzdC0xLmVsYi5hbWF6b25hd3MuY29tL2FwaS92Mi91c2VyL3Bhc3N3b3JkIiwiaWF0IjoxNzI1Njg0NDE4LCJleHAiOjE3MjU5NDM2MTgsIm5iZiI6MTcyNTY4NDQxOCwianRpIjoiMnZuS0FHQ3FkdzVwRHpFRiIsInVzZXJfaWQiOjQ1NDcsImZvcmV2ZXIiOmZhbHNlfQ.pl1b-XkwgvBjdp-gczsdx17OoSLlGvrsAjfgUTeqY7M"}
     url = f"https://www.onemap.gov.sg/api/common/elastic/search?searchVal={location}&returnGeom=Y&getAddrDetails=Y"
         
