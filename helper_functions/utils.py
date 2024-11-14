@@ -8,7 +8,8 @@ import pandas as pd
 class NcObject:
     def __init__(self,fp):
         """ 
-        @param fp (str): file path of netcdf file
+        Args:
+            fp (str): file path of netcdf file
         """
         assert fp.endswith('.nc'), "fp should be a netcdf file"
         self.fp = fp
@@ -30,7 +31,8 @@ class NcObject:
 
     def getMetadataFp(self):
         """ 
-        @param fp (str): filepath
+        Args:
+            fp (str): filepath
         """
         param, _, gcm, ssp, model_id, downscaled_model,_,temporal_res, date_range = os.path.splitext(os.path.basename(self.fp))[0].split('_')
         # date_range = date_range.split('-')
@@ -39,11 +41,12 @@ class NcObject:
     
 def getPDF(flattened_data, bins=None):
     """ 
-    @param flattened_data (np.ndarray): flattened ncdf data from .get_compressed_data()
-    @param bins (int or sequence of scalars): if bins is a sequence, it defines a monotonically increasing array of bin edges
-    returns
-    hist (array): The values of the histogram
-    bin_edges (array of dtype float): Return the bin edges (length(hist)+1)
+    Args:
+        flattened_data (np.ndarray): flattened ncdf data from .get_compressed_data()
+        bins (int or sequence of scalars): if bins is a sequence, it defines a monotonically increasing array of bin edges
+    Returns:
+        hist (array): The values of the histogram
+        bin_edges (array of dtype float): Return the bin edges (length(hist)+1)
     """
     # flattened_data = self.nc_object[self.param][:].compressed()
     if bins is None:
@@ -58,11 +61,12 @@ def getPDF(flattened_data, bins=None):
     
 def plotPDF(flattened_data, bins= 'auto' , ax= None, **kwargs):
     """ 
-    @param bins (int or sequence of scalars): if bins is a sequence, it defines a monotonically increasing array of bin edges. 'auto': automatic binning
-    @param nc_object (netCDF4 read file). all the layers in the nc_object is compressed to extract all the values across space and time
-    @param title (str): title of the plot
-    @param ax (mpl Ax): supply an axis. If none, it will just plot a single plot
-    @param **kwargs: other arguments for ax.hist 
+    Args:
+        bins (int or sequence of scalars): if bins is a sequence, it defines a monotonically increasing array of bin edges. 'auto': automatic binning
+        nc_object (netCDF4 read file). all the layers in the nc_object is compressed to extract all the values across space and time
+        title (str): title of the plot
+        ax (mpl Ax): supply an axis. If none, it will just plot a single plot
+        **kwargs: other arguments for ax.hist 
     """
     # rx1 = self.get_compressed_data()
     if ax is None:
@@ -78,11 +82,10 @@ def plotPDF(flattened_data, bins= 'auto' , ax= None, **kwargs):
     return n, bins, rectangles
 
 def plotStairs(hist,bin_edges, ax = None,**kwargs):
-    """
-    plotting prebinned hist results as a histogram.
-    Inputs are outputs of np.hist
-    @param hist (int or arrays): count of histogram
-    @param edges (sequence): bin edges
+    """plotting prebinned hist results as a histogram.
+    Args:
+        hist (int or arrays): count of histogram (step heights)
+        edges (sequence): bin edges. The step positions, with len(edges) == len(vals) + 1, between which the curve takes on vals values.
     """
     if ax is None:
         fig, ax = plt.subplots(1,1)
@@ -100,7 +103,8 @@ def plotStairs(hist,bin_edges, ax = None,**kwargs):
 class GetDistributions:
     def __init__(self,fp_list):
         """ 
-        @param fp_list (list of str): filepaths of the netcdf files for a meteorological variable
+        Args:
+            fp_list (list of str): filepaths of the netcdf files for a meteorological variable
         """
         assert len(fp_list) > 0, "fp_list must not be length 0!"
         self.fp_list = fp_list
@@ -110,7 +114,8 @@ class GetDistributions:
 
     def write_metadata(self,fp_save):
         """ 
-        @param nc_vars (dict): dictionary of metadata, obtained from vars(nc.variables[nc.param])
+        Args:
+            nc_vars (dict): dictionary of metadata, obtained from vars(nc.variables[nc.param])
         """
         # initialise a single nc object
         nc = NcObject(self.fp_list[0])
@@ -125,6 +130,7 @@ class GetDistributions:
 
     def get_nc_metadata(self):
         """ 
+        Args:
         get the metadata from a single file path
         """
         # initialise a single nc object
@@ -136,8 +142,9 @@ class GetDistributions:
     
     def getMetadata(self,fp):
         """ 
+        Args:
         Get metadata from filepath
-        @param fp (str): filepath
+            fp (str): filepath
         """
         param, _, gcm, ssp, model_id, downscaled_model,_,temporal_res, date_range = os.path.splitext(os.path.basename(fp))[0].split('_')
         # date_range = date_range.split('-')
@@ -146,12 +153,14 @@ class GetDistributions:
     
     def scenarios_dict(self):
         """ 
-        @param dt (datetime obj): datetime object to check if it falls between two datetime objects
-        returns a dict with keys, 
-        'historical': {'1995-2014':[]}, 
-        'ssp126': {'2040-2059':[], '2080-2099':[]},
-        'ssp245': {'2040-2059':[], '2080-2099':[]},
-        'ssp585': {'2040-2059':[], '2080-2099':[]},
+        Args:
+            dt (datetime obj): datetime object to check if it falls between two datetime objects
+        Returns:
+            dict: with keys, 
+                'historical': {'1995-2014':[]}, 
+                'ssp126': {'2040-2059':[], '2080-2099':[]},
+                'ssp245': {'2040-2059':[], '2080-2099':[]},
+                'ssp585': {'2040-2059':[], '2080-2099':[]},
         """
         time_period = self.time_period_categories
         dt_dict = {'historical': {time_period[0]: []}}
@@ -163,24 +172,31 @@ class GetDistributions:
         
     def get_monthly_temporal_res(self, date_range):
         """
-        return date range in YYYYMM-YYYYMM format
+        Args:
+            date_range (str): date range (YYYYMMDD-YYYYMMDD)
+        Returns:
+            str: date range in YYYYMM-YYYYMM format
         """
         date_start, date_end = date_range.split('-')
         return f'{date_start[:6]}-{date_end[:6]}'
     
     def get_year_from_date_range(self,date_range):
         """ 
-        @param date_range (str): date_range obtained from self.getMetadata(m)
-        returns a tuple of the date_start and date_end (int) in YYYY
+        Args:
+            date_range (str): date_range obtained from self.getMetadata(m)
+        Returns:
+            tuple: of the date_start and date_end (int) in YYYY
         """
         date_start, date_end = date_range.split('-')
         return int(date_start[:4]), int(date_end[:4])
     
     def hash_date_range(self, date_range):
         """ 
+        Args:
+            date_range (str): date range in YYYYMM-YYYYMM format
         this checks if the date_start and the date_end from get_year_from_date_range falls within one of the ssp's time period and returns the time period
-        @param date_range_key (str) e.g. '1995-2014' or '2040-2059' or '2080-2099'
-        @param date_range (tuple of int) from get_year_from_date_range()
+            date_range_key (str) e.g. '1995-2014' or '2040-2059' or '2080-2099'
+            date_range (tuple of int) from get_year_from_date_range()
         """
         time_period = self.time_period_categories
         for dt in time_period:
@@ -190,6 +206,7 @@ class GetDistributions:
 
     def get_plotting_dict(self):
         """ 
+        Args:
         create a nested dctionary that determines the organisation of the plots
         first level key: global climate model (gcm)
         2nd level key: ssp scenarios/historical
@@ -220,7 +237,8 @@ class GetDistributions:
     
     def concatenate_ncdfs(self, fp_list):
         """
-        @param fp_list (list of str): list of filepaths
+        Args:
+            fp_list (list of str): list of filepaths
         returns concatenated compressed np.ndarrays in the fp_list
         """
         ncdfs = [NcObject(fp) for fp in fp_list]
@@ -229,6 +247,7 @@ class GetDistributions:
     
     def generate_concatenate_ncdfs(self, fp_list):
         """ 
+        Args:
         defines a generator function that produces the compressed data from a generator output
         """
         for fp in fp_list:
@@ -247,6 +266,7 @@ class GetDistributions:
 
     def get_percentiles(self, data, perc_vals = np.arange(0,101,1,dtype=int), save_fp = None):
         """ 
+        Args:
         get 0 to 100th percentile values
         """
         perc = np.percentile(data, perc_vals)
@@ -257,7 +277,8 @@ class GetDistributions:
     
     def rawdata_to_csv(self, save_dir = None):
         """ 
-        @param save_dir (str): directory of where to save the csv file
+        Args:
+            save_dir (str): directory of where to save the csv file
         returns 20 year data for each scenario
         """
         # initialise a single nc object
@@ -286,8 +307,9 @@ class GetDistributions:
     
     def distributions_to_csv(self,bins = 100, save_dir = None):
         """ 
-        @param bins (int or sequence of scalars): if bins is a sequence, it defines a monotonically increasing array of bin edges
-        @param save_dir (str): directory of where to save the csv file
+        Args:
+            bins (int or sequence of scalars): if bins is a sequence, it defines a monotonically increasing array of bin edges
+            save_dir (str): directory of where to save the csv file
         returns histogram (pd.DataFrame) and percentile results (pd.DataFrame) in a tuple
         """
         # initialise a single nc object
@@ -353,8 +375,9 @@ class GetDistributions:
         
     def load_hist_from_csv(self, save_dir):
         """ 
-        @param save_dir (str): directory where csv file containing the hist results is stored
-        @param save_dir (str): directory of where the csv file is stored
+        Args:
+            save_dir (str): directory where csv file containing the hist results is stored
+            save_dir (str): directory of where the csv file is stored
         returns a tuple of dict, where the first item of the tuple is hist, and second item of tuple is bin sequence
         returns a dictionary where keys are tuples of (gcm, ssp, date_period)
         """
@@ -384,8 +407,9 @@ class GetDistributions:
 
     def load_perc_from_csv(self, save_dir):
         """ 
-        @param save_dir (str): directory where csv file containing the hist results is stored
-        @param save_dir (str): directory of where the csv file is stored
+        Args:
+            save_dir (str): directory where csv file containing the hist results is stored
+            save_dir (str): directory of where the csv file is stored
         returns a dictionary where keys are tuples of (gcm, ssp, date_period), and values are a list of float representing 0th - 100th percentile
         subset the 95th percentile by values[95], as the index corresponds to the percentile
         """
@@ -402,6 +426,7 @@ class GetDistributions:
     
     def build_dict_from_tuple(self, loaded_dict):
         """ 
+        Args:
         returns a dict of unique gcms, ssps, and time_period from a loaded dict from load_hist_from_csv
         """
         tuple_keys = list(loaded_dict.keys())
@@ -413,10 +438,11 @@ class GetDistributions:
 
     def plot_distributions_from_csv(self, save_dir, save = False, perc1 = 95, perc2 = 99):
         """ 
-        @param save_dir (str): directory where csv file containing the hist results is stored
-        @param plot (bool): whether to save plot or not
-        @param perc1 (float): percentile e.g. 95th percentile to overlay on the plot
-        @param perc2 (float): percentile e.g. 99th percentile to overlay on the plot
+        Args:
+            save_dir (str): directory where csv file containing the hist results is stored
+            plot (bool): whether to save plot or not
+            perc1 (float): percentile e.g. 95th percentile to overlay on the plot
+            perc2 (float): percentile e.g. 99th percentile to overlay on the plot
         """
         # initialise a single nc object
         nc_units, nc_param, nc_temporal_res = self.get_nc_metadata()
@@ -513,8 +539,9 @@ class GetDistributions:
 
     def plot_distributions(self, save_dir = None):
         """ 
-        @param hist_dir (str): file directory where the csv of the prebinned data that is previously generated from distributions_to_csv() is stored. If not None and exists, then it will load from the csv
-        @param save_dir (str): directory of where to save the plot figure
+        Args:
+            hist_dir (str): file directory where the csv of the prebinned data that is previously generated from distributions_to_csv() is stored. If not None and exists, then it will load from the csv
+            save_dir (str): directory of where to save the plot figure
         TODO: incorporate plotting of distributions using pre-binned data by importing from hist_dir
         TODO: or have a separate plotting function for pre-binned data? Likely that future data will all be computed from pre-binned data
         """
