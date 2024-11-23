@@ -271,7 +271,7 @@ def dict_to_dataframe(flood_dict,save_dir = None):
         df.to_csv(os.path.join(save_dir,"precipitation_levels_during_flood_events.csv"),index=False)
     return df
 
-def plot_grouped_boxplot(data,ax=None,colors=None, show_fliers = True):
+def plot_grouped_boxplot(data,ax=None,colors=None, hatches=[None,'.','o', 'O'],show_fliers = True):
     """ 
     Args:
         data (dict): data is arranged by each distinct group
@@ -282,6 +282,7 @@ def plot_grouped_boxplot(data,ax=None,colors=None, show_fliers = True):
             where groups A,B,C are the tick labels, and A1,A2,A3 are the sub boxplots within A
         ax (mpl.Axes): if no axis is supplied, a new figure is created. Else, artists is drawn on supplied ax
         colors (list): list of hex colours
+        hatches (list): list of hatches symbols e.g. '/', '\', '|', '-', '+', 'x', 'o', 'O', '.', '*'
         show_fliers (bool): if True, it will show the fliers (aka outliers). Else, fliers will be hidden. Default is True.
     """
 
@@ -329,7 +330,7 @@ def plot_grouped_boxplot(data,ax=None,colors=None, show_fliers = True):
     norm = plt.Normalize(min(list(num_obs.values())), max(list(num_obs.values()))) # a function
     # colors = {group: cmap(norm(n)) for group,n in num_obs.items()}
     # hatch for subplots 
-    hatches = [None,'.','o', 'O']
+    # hatches = [None,'.','o', 'O']
     # prepare data for subplots
     subplot_data = {k:[data[t][k] for t in ticks] for k in list(data[ticks[0]])} # where keys are the subgroup names, and 
     # subplot names
