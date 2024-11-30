@@ -13,6 +13,12 @@ def pickle_data(data,save_fp):
         pickle.dump(data,f, protocol=pickle.HIGHEST_PROTOCOL)
 
 def load_pickle(fp):
+    """
+    Args:
+        fp (str): filepath to pickle object
+    Returns:
+        pkl: serialised object
+    """
     with open(fp,'rb') as f:
         data = pickle.load(f)
     return data
