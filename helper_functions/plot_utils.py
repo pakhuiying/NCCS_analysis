@@ -66,3 +66,28 @@ def plot_colortable(colors, names, ncols=4, sort_colors=False):
     
     plt.show()
     return 
+
+import matplotlib as mpl
+def get_colorbar(vmin,vmax,label="Units",cmap="plasma",orientation="horizontal", plot=True):
+    """ 
+    Args:
+        vmin (float): smallest value to be mapped to the start of color map
+        vmax (float): largest value to be mapped to the end of color map
+        label (str): label for colorbar e.g. units
+        cmap (str): Name of the matplotlib colormap from which to choose the colors.
+        orientation (str): orientation of colorbar e.g. horizontal, vertical
+        plot (bool): if plot is True, plot colorbar
+        ax (Ax or None): if ax is not None, plot colorbar next to existing Ax
+    """
+
+    cmap = plt.get_cmap(cmap)
+    norm = mpl.colors.Normalize(vmin, vmax)
+    cbar = mpl.cm.ScalarMappable(norm=norm, cmap=cmap)
+    # cax = ax (meaning "draw the colorbar on ax")
+    # ax = ax (display the colorbar next to a pre-existing Axes ax)
+    if plot:
+        fig, ax = plt.subplots(figsize=(6, 1), layout='constrained')
+        fig.colorbar(cbar,cax=ax, orientation=orientation, label=label)
+    # else:
+    #     fig.colorbar(cbar,ax=ax, orientation=orientation, label=label)
+    return cbar
