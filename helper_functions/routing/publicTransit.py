@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import os
 import matplotlib.pyplot as plt
+import osmnx as ox
 import importlib
 import LTA_API_key
 importlib.reload(LTA_API_key)
@@ -67,7 +68,6 @@ class OneMapItinerary:
         self.transfers = itinerary['transfers']
         self.n_legs = len(itinerary['legs'])
         self.legs = itinerary['legs']
-        # TODO: only filter legs that have mode == 'BUS'
     
     def get_bus_legs(self):
         """ 
@@ -78,14 +78,17 @@ class OneMapItinerary:
     def get_bus_routes(self):
         """ 
         concatenate all bus legs to get the intermediate bus stops
+        Returns:
+            list: list of dataframes, where each dataframe represent the bus routes
         """
         bus_legs = self.get_bus_legs()
         busLegs = [BusLeg(b) for b in bus_legs]
         # add to attribute
         self.busLegs = busLegs
         busLegs_dfs = [B.get_stops_data() for B in busLegs]
-        busLeg_df = pd.concat(busLegs_dfs)
-        return busLeg_df
+        # busLeg_df = pd.concat(busLegs_dfs)
+        return busLegs_dfs
+    
 
     def get_total_distance(self):
         """ 
@@ -129,6 +132,94 @@ class BusLeg:
         
         return stops_df
 
+def get_bus_lims(lat,lon):
+    """ 
+    Args:
+        lat (Iterable, array, pd.Geoseries): latitude coords
+        lon (Iterable, array, pd.Geoseries): longitude coords
+    Returns:
+        returns lat extent, lat_delta, lon extent, lon_delta
+    """
+    min_lat, max_lat = lat.min(),lat.max()
+    delta_lat = max_lat - min_lat
+    min_lon, max_lon = lon.min(),lon.max()
+    delta_lon = max_lon - min_lon
+    return min_lat, max_lat, delta_lat, min_lon, max_lon, delta_lon
 
+def plot_bus_edges(G, gtfs, busLeg_df,ax=None, xlim_factor = 0.2,ylim_factor = 0.5):
+    """ 
+    plot edges where bus stops/shapes fall on
+    Args:
+        G (G): driving route
+        gtfs (pd.DataFrame): GTFS shape df that shows the bus stop coords
+        busLeg_df (pd.DataFrame): dataframe represent the bus routes obtained from OneMapItinerary or BusLeg
+        ax (mpl.Axes): if None, plot on a new figure, else, plot on supplied ax
+        xlim_factor (float): expand plot limits based on coordinates limits
+    Returns:
+        fig, ax: plotting params
+    """
+    # edges return a list of tuples (u,v,k)
+    edges = ox.distance.nearest_edges(G,X = busLeg_df['lon'], Y = busLeg_df['lat'])
+    edges_GTFS = ox.distance.nearest_edges(G,X = gtfs['shape_pt_lon'], Y = gtfs['shape_pt_lat'])
+    # plot edges
+    edges = list(edges)
+    edges_GTFS = list(edges_GTFS)
+    ec = dict()
+    ew = dict()
+    for e in G.edges(keys=True):
+        if e in edges:
+            ec[e] = "yellow"
+            ew[e] = 2
+        elif e in edges_GTFS:
+            ec[e] = "green"
+            ew[e] = 2
+        else:
+            ec[e] = "white"
+            ew[e] = 0.2
+    
+    fig, ax = ox.plot_graph(
+        G,
+        node_size=0,
+        edge_color = list(ec.values()),
+        edge_linewidth=list(ew.values()),
+        edge_alpha = 0.5,
+        ax=ax,
+        show = False,
+        close = False
+    )
+    # get graph limits
+    min_lat,max_lat,delta_lat,min_lon,max_lon,delta_lon = get_bus_lims(busLeg_df['lat'],busLeg_df['lon'])
+    # set graph limits
+    ax.set_ylim(min_lat-ylim_factor*delta_lat,max_lat+ylim_factor*delta_lat)
+    ax.set_xlim(min_lon-xlim_factor*delta_lon,max_lon+xlim_factor*delta_lon)
+    return fig, ax
+
+def plot_bus_nodes(G, gtfs, busLeg_df,ax=None, xlim_factor = 0.2,ylim_factor = 0.5):
+    """ 
+    plot nearest nodes based on gtfs and buslegs coords
+    Args:
+        G (G): driving route
+        gtfs (pd.DataFrame): GTFS shape df that shows the bus stop coords
+        busLeg_df (pd.DataFrame): dataframe represent the bus routes obtained from OneMapItinerary or BusLeg
+        ax (mpl.Axes): if None, plot on a new figure, else, plot on supplied ax
+        xlim_factor (float): expand plot limits based on coordinates limits
+    Returns:
+        fig, ax: plotting params
+    """
+    nodes = ox.distance.nearest_nodes(G,X = busLeg_df['lon'], Y = busLeg_df['lat'])
+    nc = ["yellow" if node in nodes else "white" for node in G.nodes()]
+    ns = [15 if node in nodes else 0 for node in G.nodes()]
+    fig, ax = ox.plot_graph(G,ax=ax,
+                            node_color=nc,node_size=ns,edge_linewidth=0.2,
+                            show=False,close=False)
+    for ix, rows in busLeg_df.iterrows():
+        ax.plot(rows['lon'],rows['lat'],'ro',alpha=0.7)
+    ax.plot(gtfs['shape_pt_lon'],gtfs['shape_pt_lat'],'go',alpha=0.7)
+    # get graph limits
+    min_lat,max_lat,delta_lat,min_lon,max_lon,delta_lon = get_bus_lims(busLeg_df['lat'],busLeg_df['lon'])
+    # set graph limits
+    ax.set_ylim(min_lat-ylim_factor*delta_lat,max_lat+ylim_factor*delta_lat)
+    ax.set_xlim(min_lon-xlim_factor*delta_lon,max_lon+xlim_factor*delta_lon)
+    return fig, ax
         
         
