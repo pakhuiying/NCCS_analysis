@@ -4,6 +4,7 @@ import pandas as pd
 import os
 import matplotlib.pyplot as plt
 import osmnx as ox
+import networkx as nx
 import importlib
 import LTA_API_key
 importlib.reload(LTA_API_key)
@@ -116,9 +117,10 @@ class BusLeg:
         self.distance = busLeg['distance'] # in metres
         self.startTime = busLeg['startTime']
         self.endTime = busLeg['endTime']
-        
+        self.tripId = busLeg['tripId']
         self.mode = busLeg['mode']
         self.routeId = busLeg['routeId'] # bus number
+        self.legGeometry = busLeg['legGeometry']
 
     def get_stops_data(self):
         """ 
@@ -131,6 +133,193 @@ class BusLeg:
         stops_df = pd.DataFrame(stops_list)
         
         return stops_df
+
+class BusStopRoutes:
+    def __init__(self, G, gtfs):
+        """
+        Args:
+            G (MultiDiGraph): graph of drive network
+            gtfs (pd.DataFrame): gtfs shapes df of a selected bus service and route from gtfs_shape
+        """
+        self.G = G
+        self.gtfs = gtfs
+
+    def get_bus_edges_nodes(self):
+        """ 
+        get edges where bus stops lie on top/closest to the road
+        from the edges, derive the nodes of the edges
+        Returns:
+            list: list of candidate node IDs that make up the route
+        """
+        edges_GTFS = ox.distance.nearest_edges(self.G,X = self.gtfs['shape_pt_lon'], Y = self.gtfs['shape_pt_lat'])
+        # find the shortest path between nodes, minimizing travel time
+        routes = []
+        for e in range(len(edges_GTFS)-1):
+            # get the shortest path within an identified edge
+            route1 = [edges_GTFS[e][0], edges_GTFS[e][1]]
+            # get the shortest path from the end of an edge to the start of the next edge
+            route2 = ox.shortest_path(self.G, edges_GTFS[e][1], edges_GTFS[e+1][0], weight="travel_time")
+            route = route1 + route2
+            for r in route:
+                # append the nodes visited by shortest path in sequential order
+                routes.append(r)
+        # append the last node of the last edge
+        routes.append(edges_GTFS[-1][1])
+        # print('edges_GTFS: ',edges_GTFS)
+        return routes
+
+
+    def get_route_graph(self, routes: list, plot = True):
+        """ 
+        The goal is to build a graph from the sequence of nodes, and locate if there is a connected shortestest path from the candidates nodes
+        Args:
+            routes (list): list of sequence of nodes in order from the origin to destination
+            plot (bool): If true, plot a simple network graph on mpl
+        Return:
+            G (nx.DiGraph)
+        """
+        G = nx.DiGraph() # instatiate an empty directed graph
+        G.add_node(routes[0]) # instatiate origin node as the origin
+        for i in range(len(routes)-1): #
+            # we want to ensure that the nodes are only added downstream from the O to D
+            if (routes[i] != routes[i+1]) and (not G.has_node(routes[i+1])): # make sure there is no self-loop, and the children node is not the parent node
+                G.add_edge(routes[i],routes[i+1])
+
+        if plot:
+            nodes = list(G)
+            labels = {n:f'{i}: {n}' for i,n in enumerate(nodes)}
+            if routes[0] in nodes:
+                labels[routes[0]] = f"O: {routes[0]}"
+            if routes[-1] in nodes:
+                labels[routes[-1]] = f"D: {routes[-1]}"
+            nx.draw(G,labels=labels,font_size=6)
+            
+        return G
+
+    def check_shortest_path(self, G, origin_node, destination_node):
+        """ 
+        if there is a connected path from origin to destination_node, return the shortest OD path
+        Args:
+            G (nx.DiGraph): graph generated from `get_route_graph`
+            origin_node (int): node ID of origin
+            destination_node (int): node ID of destination
+        """
+        return nx.shortest_path(G, origin_node, destination_node)
+
+    def busRoute_shortestPath(self, plot = True):
+        """ 
+        get edges where bus stops lie on top/closest to the road
+        from the edges, derive the nodes of the edges
+        Args:
+            G (MultiDiGraph): graph of drive network
+            gtfs (pd.DataFrame): gtfs shapes df
+        Returns:
+            list: list of candidate node IDs that make up the route
+        """
+        # get nodes from edges
+        routes = self.get_bus_edges_nodes()
+        sub_G = self.get_route_graph(routes,plot=False)
+        try:
+            updated_nodes = self.check_shortest_path(sub_G, routes[0], routes[-1])
+        except:
+            updated_nodes = [] # if there is an error, yield 0 nodes
+        
+        if plot:
+            try:
+                fig,ax = ox.plot_graph_route(self.G, updated_nodes, node_size=0,show=False,close=False)
+                min_lat, max_lat, delta_lat, min_lon, max_lon, delta_lon = get_bus_lims(self.gtfs['shape_pt_lat'],self.gtfs['shape_pt_lon'])
+                ax.set_ylim(min_lat-0.5*delta_lat,max_lat+0.5*delta_lat)
+                ax.set_xlim(min_lon-0.5*delta_lon,max_lon+0.5*delta_lon)
+                plt.show()
+
+            except:
+                plot_routes(self.G,updated_nodes,self.gtfs)
+
+        return updated_nodes
+
+# def identify_duplicated_node(nodes: list):
+#     """ 
+#     identifies duplicated nodes and returns the indices of the duplicated nodes
+#     Args:
+#         nodes (list): list of node IDs
+#     Returns:
+#         dict: keys are node IDs, values are list of indices where the node is duplicated
+#     """
+#     route_dict = dict()
+#     for i,n in enumerate(nodes):
+#         if n not in route_dict:
+#             route_dict[n] = [i]
+#         else:
+#             route_dict[n].append(i)
+#     return route_dict
+
+# def busRoute_shortestPath(G,gtfs, plot = True):
+#     """ 
+#     get edges where bus stops lie on top/closest to the road
+#     from the edges, derive the nodes of the edges
+#     Args:
+#         G (MultiDiGraph): graph of drive network
+#         gtfs (pd.DataFrame): gtfs shapes df
+#     Returns:
+#         list: list of candidate node IDs that make up the route
+#     """
+#     # get nodes from edges
+#     routes = get_bus_edges_nodes(G,gtfs)
+#     # identify which nodes get duplicated
+#     duplicated_nodes = identify_duplicated_node(routes) # returns a dict where keys = nodes, values = list of indices of the duplicated nodes
+#     updated_nodes = check_connectivity(G,duplicated_nodes)
+    
+#     if plot:
+#         try:
+#             fig,ax = ox.plot_graph_route(G, updated_nodes, node_size=0,show=False,close=False)
+#             min_lat, max_lat, delta_lat, min_lon, max_lon, delta_lon = publicTransit.get_bus_lims(gtfs['shape_pt_lat'],gtfs['shape_pt_lon'])
+#             ax.set_ylim(min_lat-0.5*delta_lat,max_lat+0.5*delta_lat)
+#             ax.set_xlim(min_lon-0.5*delta_lon,max_lon+0.5*delta_lon)
+#             plt.show()
+
+#         except:
+#             publicTransit.plot_routes(G,updated_nodes,gtfs)
+
+#     return updated_nodes
+
+# def check_connectivity(G,nodes_dict):
+#     """ 
+#     checks connectivity between the candidate nodes, and removes any disjointe paths
+#     Args:
+#         G (MultiDiGraph): graph of drive network
+#         nodes_dict (dict): dict: keys are node IDs, values are list of indices where the node is duplicated
+#     Returns:
+#         list: node IDs which shows the connected route
+#     """
+#     candidate_nodes = list(nodes_dict)
+#     nodes_last_idx = [i[-1] for i in list(nodes_dict.values())]
+#     # if the route progresses naturally without hiccups, it should only traverse each node once
+#     # if there is a disjoint/disruption in the path, then the routes will not be strictly increasing
+#     # a disjoint manifest in a negative value when we take the diff
+#     negative_diff = np.diff(nodes_last_idx) # diff[i] = x[i+1] - x[i]
+#     negative_ix = np.where(negative_diff<0)[0] + 1 # returns the index where diff is negative
+#     negative_ix = negative_ix.tolist()
+#     # find the shortest path between the 2 nodes prior and after the negative_ix node
+#     updated_nodes = []
+#     counter_nix = 0
+#     current_ix = negative_ix[counter_nix]
+#     for i in range(len(candidate_nodes)):
+#         if i != current_ix:
+#             updated_nodes.append(candidate_nodes[i])
+#         else:
+#             if (i > 0) and (i < len(candidate_nodes) - 1):
+#                 nix1, nix2 = current_ix-1,current_ix+1 # the indices before and after the negative_ix nodes
+#                 print(f'{candidate_nodes[nix1]} to {candidate_nodes[nix2]}')
+#                 rerouted_route = ox.shortest_path(G, candidate_nodes[nix1], candidate_nodes[nix2], weight="travel_time")
+#                 updated_nodes.extend(rerouted_route[1:-1])
+#             else:
+#                 # if the node to remove is at the start or at the end, just skip the node
+#                 pass
+#             counter_nix += 1
+#             if counter_nix < len(negative_ix):
+#                 current_ix = negative_ix[counter_nix]
+#     return updated_nodes
+# =======PLOTTING UTILS===============
 
 def get_bus_lims(lat,lon):
     """ 
@@ -154,9 +343,10 @@ def plot_bus_edges(G, gtfs, busLeg_df,ax=None, xlim_factor = 0.2,ylim_factor = 0
         gtfs (pd.DataFrame): GTFS shape df that shows the bus stop coords
         busLeg_df (pd.DataFrame): dataframe represent the bus routes obtained from OneMapItinerary or BusLeg
         ax (mpl.Axes): if None, plot on a new figure, else, plot on supplied ax
-        xlim_factor (float): expand plot limits based on coordinates limits
+        xlim_factor (float): expand plot xlimits based on coordinates limits
+        ylim_factor (float): expand plot ylimits based on coordinates limits
     Returns:
-        fig, ax: plotting params
+        fig, ax: plotting params. Yellow edges refer to edges determined by busLeg_df, green edges refer to edges determined by GTFS
     """
     # edges return a list of tuples (u,v,k)
     edges = ox.distance.nearest_edges(G,X = busLeg_df['lon'], Y = busLeg_df['lat'])
@@ -202,9 +392,10 @@ def plot_bus_nodes(G, gtfs, busLeg_df,ax=None, xlim_factor = 0.2,ylim_factor = 0
         gtfs (pd.DataFrame): GTFS shape df that shows the bus stop coords
         busLeg_df (pd.DataFrame): dataframe represent the bus routes obtained from OneMapItinerary or BusLeg
         ax (mpl.Axes): if None, plot on a new figure, else, plot on supplied ax
-        xlim_factor (float): expand plot limits based on coordinates limits
+        xlim_factor (float): expand plot xlimits based on coordinates limits
+        ylim_factor (float): expand plot ylimits based on coordinates limits
     Returns:
-        fig, ax: plotting params
+        fig, ax: plotting params. yellow refer to the nearest nodes from busLeg_df, red points refer to busLeg_df, green points refer to GTFS, 
     """
     nodes = ox.distance.nearest_nodes(G,X = busLeg_df['lon'], Y = busLeg_df['lat'])
     nc = ["yellow" if node in nodes else "white" for node in G.nodes()]
@@ -222,4 +413,34 @@ def plot_bus_nodes(G, gtfs, busLeg_df,ax=None, xlim_factor = 0.2,ylim_factor = 0
     ax.set_xlim(min_lon-xlim_factor*delta_lon,max_lon+xlim_factor*delta_lon)
     return fig, ax
         
-        
+def plot_routes(G,routes,gtfs,ax=None, xlim_factor = 0.2,ylim_factor = 0.5):
+    """ 
+    Plot route for every adjacent node
+    Args:
+        G (G): driving route
+        routes (list): list of candidate nodes that make up the route
+        gtfs (pd.DataFrame): GTFS shape df that shows the bus stop coords
+        ax (mpl.Axes): if None, plot on a new figure, else, plot on supplied ax
+        xlim_factor (float): expand plot xlimits based on coordinates limits
+        ylim_factor (float): expand plot ylimits based on coordinates limits
+    """
+    fig, ax = ox.plot_graph_route(G, [routes[0],routes[1]], node_size=0,
+                                route_color="r",
+                                ax=ax,show=False,close=False)
+    color_cycler = ['r','g','b']
+    for i in range(1,len(routes)-1):
+        ix_color = i%len(color_cycler)
+        try:
+            ox.plot_graph_route(G, [routes[i],routes[i+1]], node_size=0,
+                                    route_color=color_cycler[ix_color],
+                                    ax=ax,show=False,close=False)
+        except:
+            print(f'{routes[i]} to {routes[i+1]}')
+            pass
+    
+    # get graph limits
+    min_lat,max_lat,delta_lat,min_lon,max_lon,delta_lon = get_bus_lims(gtfs['shape_pt_lat'],gtfs['shape_pt_lon'])
+    # set graph lims
+    ax.set_ylim(min_lat-ylim_factor*delta_lat,max_lat+ylim_factor*delta_lat)
+    ax.set_xlim(min_lon-xlim_factor*delta_lon,max_lon+xlim_factor*delta_lon)
+    return fig, ax
