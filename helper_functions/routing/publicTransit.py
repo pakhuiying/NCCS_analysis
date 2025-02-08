@@ -42,6 +42,8 @@ def get_OneMap_itineraries(headers,start_lat,start_lon,end_lat,end_lon,date,time
         mode (str): e.g. 'TRANSIT'.  Mode of public transport: TRANSIT, BUS, RAIL. Entry must be specified in UPPERCASE
         maxWalkDistance (float): e.g. 1000. The maximum walking distance set by the user in metres.
         numItineraries (int): maximum number if possible itineraries to fetch
+    Returns:
+        list of dict: where each dict represents different itineraries (i.e. different ways from O to D)
     """
     url = f"https://www.onemap.gov.sg/api/public/routingsvc/route?start={start_lat}%2C{start_lon}&end={end_lat}%2C{end_lon}&routeType={route_type}&date={date}&time={time}&mode={mode}&maxWalkDistance={maxWalkDistance}&numItineraries={numItineraries}"
 
@@ -58,7 +60,6 @@ class OneMapItinerary:
         """ 
         Args:
             itinerary (dict): an itinerary, where keys are the metadata of the itinerary. Itineraries are obtained from OneMap's routing API
-            GTFS (pd.DataFrame): a dataframe created from joining GTFS's stop_times and stops, such that stop sequence, and its stop ID and coordinates are captured
         """
         self.itinerary = itinerary
         self.duration = itinerary['duration'] # in seconds
