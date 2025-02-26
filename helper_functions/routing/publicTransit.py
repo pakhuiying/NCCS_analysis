@@ -7,8 +7,11 @@ import osmnx as ox
 import networkx as nx
 import importlib
 import LTA_API_key
+import helper_functions.utils
 importlib.reload(LTA_API_key)
+importlib.reload(helper_functions.utils)
 import LTA_API_key as apiKeys
+import helper_functions.utils as utils
 from datetime import datetime
 
 def generate_OneMap_token():
@@ -445,3 +448,142 @@ def plot_routes(G,routes,gtfs,ax=None, xlim_factor = 0.2,ylim_factor = 0.5):
     ax.set_ylim(min_lat-ylim_factor*delta_lat,max_lat+ylim_factor*delta_lat)
     ax.set_xlim(min_lon-xlim_factor*delta_lon,max_lon+xlim_factor*delta_lon)
     return fig, ax
+
+def public_transit_routing(origin_coord, origin_key, destination_coord, destination_key,
+                           G_bus, GTFS_shapes, headers,
+                           route_type = "pt" ,
+                            date = '02-05-2025',
+                            time = '08%3A00%3A00' ,
+                            mode = 'TRANSIT' ,
+                            maxWalkDistance = '1000' ,
+                            numItineraries = '3',
+                            plot = True,
+                            save_fp = None):
+    """ Information captured for an individual OD journey
+    Args:
+        origin_coord (tuple): lat,lon
+        origin_key (Any): a key to help u identify the origin coord e.g. bus stop code
+        destination_coord (tuple): lat,lon
+        destination_key (Any): a key to help u identify the destination coord e.g. nodeID in G_bus
+        G_bus (MultiDiGraph): graph of drive bus network
+        GTFS_shapes (pd.DataFrame): dataframe of the GTFS's shapes file
+        headers (dict): Authorization headers
+        start_lat (float): latitude coordinate of where you start your journey
+        start_lon (float): longitude coordinate of where you start your journey
+        end_lat (float): latitude coordinate of where you end your journey
+        end_lon (float): longitude coordinate of where you end your journey
+        route_type (str): "pt" # Route types available walk, drive, pt, and cycle. Only lowercase is allowed.
+        date (str):  e.g. '01-13-2025' Date of the selected start point in MM-DD-YYYY.
+        time (str): e.g. '07%3A35%3A00' Time of the selected start point in [HH][MM][SS], using the 24-hour clock system. 
+        mode (str): e.g. 'TRANSIT'.  Mode of public transport: TRANSIT, BUS, RAIL. Entry must be specified in UPPERCASE
+        maxWalkDistance (float): e.g. 1000. The maximum walking distance set by the user in metres.
+        numItineraries (int): maximum number if possible itineraries to fetch
+        plot (bool): if True, plot shortest bus route
+        save_fp (str or None): exports the itinerary as json data
+    """
+    # initialise OD
+    start_lat = origin_coord[0]
+    start_lon = origin_coord[1]
+    end_lat = destination_coord[0]
+    end_lon = destination_coord[1]
+    # fetch itinerary from OneMapAPI
+    try:
+        itineraries = get_OneMap_itineraries(headers=headers,
+                                        start_lat = start_lat,
+                                        start_lon = start_lon,
+                                        end_lat = end_lat,
+                                        end_lon= end_lon,
+                                        route_type = route_type ,
+                                        date = date,
+                                        time = time ,
+                                        mode = mode ,
+                                        maxWalkDistance = maxWalkDistance ,
+                                        numItineraries = numItineraries
+                                        )
+    except:
+        # if token expires, generate a new token
+        headers = generate_OneMap_token()
+        itineraries = get_OneMap_itineraries(headers=headers,
+                                        start_lat = start_lat,
+                                        start_lon = start_lon,
+                                        end_lat = end_lat,
+                                        end_lon= end_lon,
+                                        route_type = route_type ,
+                                        date = date,
+                                        time = time ,
+                                        mode = mode ,
+                                        maxWalkDistance = maxWalkDistance ,
+                                        numItineraries = numItineraries
+                                        )
+
+    # get bus legs from the FIRST itinerary
+    OMI = OneMapItinerary(itinerary=itineraries[0])
+    busLeg_dfs = OMI.get_bus_routes()
+
+    # initialise empty dict to store data
+    # assumes that route is from any bus stop in SG to a workplace
+    save_itinerary = {'busStart':(start_lat,start_lon, origin_key),
+                      'workEnd': (end_lat, end_lon, destination_key),
+                      'duration': OMI.duration,
+                      'startTime': OMI.startTime,
+                      'endTime': OMI.endTime,
+                      'transitTime': OMI.transitTime,
+                      'waitingTime': OMI.waitingTime,
+                      'transfers': OMI.transfers,
+                      'busLegs': []
+                      }
+    # iterate across different busLeg
+    for busLeg_number in range(len(busLeg_dfs)):
+        busLeg = OMI.busLegs[busLeg_number]
+        # get bus leg meta data
+        duration = busLeg.duration
+        distance = busLeg.distance
+        startTime = busLeg.startTime
+        endTime = busLeg.endTime
+        tripId = busLeg.tripId
+        tripDirection = int(tripId.split('-')[1]) - 1
+        mode = busLeg.mode
+        routeId = busLeg.routeId
+        legGeometry = busLeg.legGeometry
+        # get bus leg df
+        busLeg_df = busLeg_dfs[busLeg_number]
+        busLeg_dict = busLeg_df.to_dict('records')
+        stopSequence = busLeg_df['stopSequence'].to_list()
+        # filter gtfs_shapes based on bus's stop sequence
+        gtfs = GTFS_shapes[(GTFS_shapes['shape_id'].str.contains(f'^{routeId}:WD:{tripDirection}.*')) & (GTFS_shapes['shape_pt_sequence'].isin(stopSequence))]
+        # make sure to sort the shape_pt_sequence in ascending order to ensure chronological sequence of bus stops visited along bus route
+        gtfs = gtfs.sort_values('shape_pt_sequence')
+        gtfs_dict = gtfs.to_dict('records')
+        # get shortest bus route based on gtfs_shape sequence
+        try:
+            BSR = BusStopRoutes(G=G_bus,gtfs=gtfs)
+            route_nodesID = BSR.busRoute_shortestPath(plot=plot)
+        except Exception as e:
+            # if there is an error, change the save_fp name so that it's easy to identify the error
+            if save_fp is not None:
+                save_fp = f'{os.path.splitext(save_fp)[0]}_ERROR'
+            route_nodesID = None # save the error msg as nodesID
+
+        save_busLeg = {'leg_number': busLeg_number,
+                       'duration': duration,
+                       'distance': distance,
+                       'startTime': startTime,
+                       'endTime': endTime,
+                       'tripId': tripId,
+                       'tripDirection': tripDirection,
+                       'mode': mode,
+                       'routeId': routeId,
+                       'legGeometry': legGeometry,
+                       'busLeg': busLeg_dict,
+                       'gtfs': gtfs_dict,
+                       'routesNodesID': route_nodesID
+                       }
+        save_itinerary['busLegs'].append(save_busLeg)
+    
+    if save_fp is not None:
+        # export as json
+        try:
+            utils.json_data(save_itinerary, save_fp)
+        except:
+            print('Object is not serializable as JSON')
+    return save_itinerary

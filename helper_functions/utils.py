@@ -45,6 +45,15 @@ def load_json(fp):
         data = json.load(f)
     return data
 
+def load_txt(fp):
+    """ 
+    Args:
+        fp (str): filepath to convert line-by-line txt file into a list
+    """
+    with open(fp) as f:
+        lines = [line.rstrip() for line in f]
+    return lines
+
 def logistic(x, beta, alpha):
     """ logistic curve
     """
