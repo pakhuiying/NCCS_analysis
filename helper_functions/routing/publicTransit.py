@@ -163,6 +163,9 @@ class BusStopRoutes:
             route1 = [edges_GTFS[e][0], edges_GTFS[e][1]]
             # get the shortest path from the end of an edge to the start of the next edge
             route2 = ox.shortest_path(self.G, edges_GTFS[e][1], edges_GTFS[e+1][0], weight="travel_time")
+            if not isinstance(route2,list): # check if route2 returns a list
+                print(f"Shortest path route does not return a list: {type(route2)}")
+                route2 = []
             route = route1 + route2
             for r in route:
                 # append the nodes visited by shortest path in sequential order
@@ -486,6 +489,14 @@ def public_transit_routing(origin_coord, origin_key, destination_coord, destinat
     start_lon = origin_coord[1]
     end_lat = destination_coord[0]
     end_lon = destination_coord[1]
+
+    def checkGTFS(gtfs_df):
+        """ check if df is of length 0"""
+        if len(gtfs_df.index) == 0:
+            raise Exception("GTFS df is of zero length!")
+        else:
+            return gtfs_df
+        
     # fetch itinerary from OneMapAPI
     try:
         itineraries = get_OneMap_itineraries(headers=headers,
@@ -550,7 +561,17 @@ def public_transit_routing(origin_coord, origin_key, destination_coord, destinat
         busLeg_dict = busLeg_df.to_dict('records')
         stopSequence = busLeg_df['stopSequence'].to_list()
         # filter gtfs_shapes based on bus's stop sequence
-        gtfs = GTFS_shapes[(GTFS_shapes['shape_id'].str.contains(f'^{routeId}:WD:{tripDirection}.*')) & (GTFS_shapes['shape_pt_sequence'].isin(stopSequence))]
+        # check if gtfs has length 0
+        try:
+            gtfs = checkGTFS(GTFS_shapes[(GTFS_shapes['shape_id'].str.contains(f'^{routeId}:WD:{tripDirection}.*')) & (GTFS_shapes['shape_pt_sequence'].isin(stopSequence))])
+        except:
+            try:
+                gtfs = checkGTFS(GTFS_shapes[(GTFS_shapes['shape_id'].str.contains(f'^{routeId}:SAT:{tripDirection}.*')) & (GTFS_shapes['shape_pt_sequence'].isin(stopSequence))])
+            except:
+                try:
+                    gtfs = checkGTFS(GTFS_shapes[(GTFS_shapes['shape_id'].str.contains(f'^{routeId}:SUN:{tripDirection}.*')) & (GTFS_shapes['shape_pt_sequence'].isin(stopSequence))])
+                except:
+                    raise Exception(f'Relevant GTFS data cannot be obtained from the routeId and trip direction.Check if GTFS has the bus service.: {routeId} ')
         # make sure to sort the shape_pt_sequence in ascending order to ensure chronological sequence of bus stops visited along bus route
         gtfs = gtfs.sort_values('shape_pt_sequence')
         gtfs_dict = gtfs.to_dict('records')
