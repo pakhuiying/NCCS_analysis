@@ -139,14 +139,18 @@ class BusLeg:
         return stops_df
 
 class BusStopRoutes:
-    def __init__(self, G, gtfs):
+    def __init__(self, G, gtfs,lat_name='shape_pt_lat',lon_name='shape_pt_lon'):
         """
         Args:
             G (MultiDiGraph): graph of drive network
-            gtfs (pd.DataFrame): gtfs shapes df of a selected bus service and route from gtfs_shape
+            gtfs (pd.DataFrame): gtfs shapes df of a selected bus service, route, and bus stop coordinates
+            lat_name (str): column name of bus stop latitude
+            lon_name (str): column name of bus stop longitude
         """
         self.G = G
         self.gtfs = gtfs
+        self.lat_name = lat_name
+        self.lon_name = lon_name
 
     def get_bus_edges_nodes(self):
         """ 
@@ -155,7 +159,7 @@ class BusStopRoutes:
         Returns:
             list: list of candidate node IDs that make up the route
         """
-        edges_GTFS = ox.distance.nearest_edges(self.G,X = self.gtfs['shape_pt_lon'], Y = self.gtfs['shape_pt_lat'])
+        edges_GTFS = ox.distance.nearest_edges(self.G,X = self.gtfs[self.lon_name], Y = self.gtfs[self.lat_name])
         # find the shortest path between nodes, minimizing travel time
         routes = []
         for e in range(len(edges_GTFS)-1):
@@ -226,6 +230,9 @@ class BusStopRoutes:
         # get nodes from edges
         routes = self.get_bus_edges_nodes()
         sub_G = self.get_route_graph(routes,plot=False)
+
+        # get bus stop coordinates
+        lat_iterable,lon_iterable = self.gtfs[self.lat_name], self.gtfs[self.lon_name]
         try:
             updated_nodes = self.check_shortest_path(sub_G, routes[0], routes[-1])
         except:
@@ -234,13 +241,13 @@ class BusStopRoutes:
         if plot:
             try:
                 fig,ax = ox.plot_graph_route(self.G, updated_nodes, node_size=0,show=False,close=False)
-                min_lat, max_lat, delta_lat, min_lon, max_lon, delta_lon = get_bus_lims(self.gtfs['shape_pt_lat'],self.gtfs['shape_pt_lon'])
+                min_lat, max_lat, delta_lat, min_lon, max_lon, delta_lon = get_bus_lims(lat_iterable,lon_iterable)
                 ax.set_ylim(min_lat-0.5*delta_lat,max_lat+0.5*delta_lat)
                 ax.set_xlim(min_lon-0.5*delta_lon,max_lon+0.5*delta_lon)
                 plt.show()
 
             except:
-                plot_routes(self.G,updated_nodes,self.gtfs)
+                plot_routes(self.G,updated_nodes,lat_iterable,lon_iterable)
 
         return updated_nodes
 
@@ -420,13 +427,14 @@ def plot_bus_nodes(G, gtfs, busLeg_df,ax=None, xlim_factor = 0.2,ylim_factor = 0
     ax.set_xlim(min_lon-xlim_factor*delta_lon,max_lon+xlim_factor*delta_lon)
     return fig, ax
         
-def plot_routes(G,routes,gtfs,ax=None, xlim_factor = 0.2,ylim_factor = 0.5):
+def plot_routes(G,routes,lat_iterable,lon_iterable,ax=None, xlim_factor = 0.2,ylim_factor = 0.5):
     """ 
     Plot route for every adjacent node
     Args:
         G (G): driving route
         routes (list): list of candidate nodes that make up the route
-        gtfs (pd.DataFrame): GTFS shape df that shows the bus stop coords
+        lat_iterable (Iterable, np.array, pd.Series): list of lat arrays that bounds the routes
+        lon_iterable (Iterable, np.array, pd.Series): list of lon arrays that bounds the routes
         ax (mpl.Axes): if None, plot on a new figure, else, plot on supplied ax
         xlim_factor (float): expand plot xlimits based on coordinates limits
         ylim_factor (float): expand plot ylimits based on coordinates limits
@@ -446,7 +454,7 @@ def plot_routes(G,routes,gtfs,ax=None, xlim_factor = 0.2,ylim_factor = 0.5):
             pass
     
     # get graph limits
-    min_lat,max_lat,delta_lat,min_lon,max_lon,delta_lon = get_bus_lims(gtfs['shape_pt_lat'],gtfs['shape_pt_lon'])
+    min_lat,max_lat,delta_lat,min_lon,max_lon,delta_lon = get_bus_lims(lat_iterable,lon_iterable)
     # set graph lims
     ax.set_ylim(min_lat-ylim_factor*delta_lat,max_lat+ylim_factor*delta_lat)
     ax.set_xlim(min_lon-xlim_factor*delta_lon,max_lon+xlim_factor*delta_lon)
@@ -462,7 +470,7 @@ def public_transit_routing(origin_coord, origin_key, destination_coord, destinat
                             numItineraries = '3',
                             plot = True,
                             save_fp = None):
-    """ Information captured for an individual OD journey
+    """ Information captured for an individual OD journey. Obtain routes from GTFS.
     Args:
         origin_coord (tuple): lat,lon
         origin_key (Any): a key to help u identify the origin coord e.g. bus stop code
