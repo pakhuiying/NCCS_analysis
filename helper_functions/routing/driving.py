@@ -27,7 +27,7 @@ def get_shortest_path_driving(G, orig, dest=None,
     Returns:
         dict: keys: node IDs, values: total travel time (in seconds) from orig to dest along the shortest path 
     """
-    
+    # returns a dict keyed by target, values are shortest path length from the source to the target
     route_times = nx.shortest_path_length(G,source=orig, target=dest, weight=cost)
 
     if plot:
