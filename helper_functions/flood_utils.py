@@ -424,3 +424,24 @@ def get_boxplot_data(flood_df):
                 boxplot_data[drainage_catchment][ppt_name].append(ppt_val)
 
     return boxplot_data
+
+def get_historical_ppt_percentiles(fp, 
+                                   rf_types = ['highest 30 min rainfall (mm)','highest 60 min rainfall (mm)','highest 120 min rainfall (mm)'],
+                                   percentiles = [50, 75, 90, 95, 99]):
+    """ returns a extreme rainfall values for max 30, 60, 120 mins
+    Args:
+        fp (str): filepath to the historical weather csv
+        rf_types (list of str): type of ppt e.g. max 30mins, max 60mins
+        percentiles (list or np.array): percentile values to extract from
+    Returns:
+        percentiles (list or np.array): percentile values to extract from
+        dict: returns the 50, 75, 90, 95, 99th percentile of historical rainfall events for each rainfall type
+    """
+    weather_df1 = pd.read_csv(fp)
+    historical_ppt_percentiles = dict()
+    for rf_type in rf_types:
+        x = weather_df1[rf_type].values
+        x = x[~np.isnan(x)]
+        p = np.percentile(x, percentiles) # CCRS deems extreme ppt at 95th and 99th percentile
+        historical_ppt_percentiles[rf_type] = p
+    return percentiles, historical_ppt_percentiles
