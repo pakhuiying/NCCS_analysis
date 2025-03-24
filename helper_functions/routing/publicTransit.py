@@ -671,17 +671,20 @@ class TripItinerary:
         Args:
             color_cycler (list of str): list of color for cycling through colors
         Returns:
-            tuple: list, list
+            tuple: list, list, list
                 list: list of routes, where route is a list of nodes
+                list: routeID aka service number of buses
                 list: list of rgb
         """
         routes = []
         rc = []
+        routeId = []
         for i, busLeg in enumerate(self.itinerary['busLegs']):
             ix_color = i%len(color_cycler)
             routes.append(busLeg['routesNodesID'])
             rc.append(color_cycler[ix_color])
-        return routes, rc
+            routeId.append(busLeg['routeId'])
+        return routes, routeId, rc
 
     def get_route_time_and_distance(self,route):
         """ get simulated route time and distance via osmnx
@@ -718,7 +721,7 @@ class TripItinerary:
         # get graph limits
         min_lat,max_lat,delta_lat,min_lon,max_lon,delta_lon = self.bounding_box_coords(start_coords,end_coords)
         
-        routes, rc = self.get_itinerary_bus_routes()
+        routes, routeId ,rc = self.get_itinerary_bus_routes()
         fig, ax = ox.plot_graph_routes(self.G, routes, route_colors=rc, route_linewidth=6, node_size=0,
                                     ax=ax,show=False,close=False)
         
@@ -743,7 +746,7 @@ class TripItinerary:
         end_lon = self.itinerary['workEnd'][1]
         actual_total_duration, actual_bus_duration = self.get_non_bus_duration()
         non_bus_duration = actual_total_duration - actual_bus_duration
-        routes, _ = self.get_itinerary_bus_routes()
+        routes, routeId, _ = self.get_itinerary_bus_routes()
         actual_bus_distance = sum([float(busLeg['distance']) for busLeg in self.itinerary['busLegs']])
         simulated_bus_distance = simulated_bus_duration = 0
         for r in routes:
@@ -753,8 +756,10 @@ class TripItinerary:
         number_of_busroutes = len(self.itinerary['busLegs'])
         simulated_total_duration = non_bus_duration + simulated_bus_duration
         return {'start_lat':start_lat,'start_lon':start_lon,'end_lat':end_lat,'end_lon':end_lon,
+                'duration':self.itinerary['duration'],'transitTime':self.itinerary['transitTime'],
+                'waitingTime':self.itinerary['waitingTime'],'transfers':self.itinerary['transfers'],
                 'actual_bus_duration':actual_bus_duration,'simulated_bus_duration':simulated_bus_duration,
                 'actual_bus_distance':actual_bus_distance,'simulated_bus_distance':simulated_bus_distance,
                 'actual_total_duration':actual_total_duration,'simulated_total_duration':simulated_total_duration,
-                'non_bus_duration':non_bus_duration,'number_of_busroutes':number_of_busroutes
+                'non_bus_duration':non_bus_duration,'number_of_busroutes':number_of_busroutes, 'routeId':','.join(routeId),
                 }
