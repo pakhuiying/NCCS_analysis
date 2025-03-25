@@ -2,6 +2,7 @@ import requests
 import numpy as np
 import pandas as pd
 import os
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import osmnx as ox
 import networkx as nx
@@ -13,6 +14,7 @@ importlib.reload(helper_functions.utils)
 import LTA_API_key as apiKeys
 import helper_functions.utils as utils
 from datetime import datetime
+
 
 def generate_OneMap_token():
     """ generates new one map token """
@@ -250,90 +252,6 @@ class BusStopRoutes:
                 plot_routes(self.G,updated_nodes,lat_iterable,lon_iterable)
 
         return updated_nodes
-
-# def identify_duplicated_node(nodes: list):
-#     """ 
-#     identifies duplicated nodes and returns the indices of the duplicated nodes
-#     Args:
-#         nodes (list): list of node IDs
-#     Returns:
-#         dict: keys are node IDs, values are list of indices where the node is duplicated
-#     """
-#     route_dict = dict()
-#     for i,n in enumerate(nodes):
-#         if n not in route_dict:
-#             route_dict[n] = [i]
-#         else:
-#             route_dict[n].append(i)
-#     return route_dict
-
-# def busRoute_shortestPath(G,gtfs, plot = True):
-#     """ 
-#     get edges where bus stops lie on top/closest to the road
-#     from the edges, derive the nodes of the edges
-#     Args:
-#         G (MultiDiGraph): graph of drive network
-#         gtfs (pd.DataFrame): gtfs shapes df
-#     Returns:
-#         list: list of candidate node IDs that make up the route
-#     """
-#     # get nodes from edges
-#     routes = get_bus_edges_nodes(G,gtfs)
-#     # identify which nodes get duplicated
-#     duplicated_nodes = identify_duplicated_node(routes) # returns a dict where keys = nodes, values = list of indices of the duplicated nodes
-#     updated_nodes = check_connectivity(G,duplicated_nodes)
-    
-#     if plot:
-#         try:
-#             fig,ax = ox.plot_graph_route(G, updated_nodes, node_size=0,show=False,close=False)
-#             min_lat, max_lat, delta_lat, min_lon, max_lon, delta_lon = publicTransit.get_bus_lims(gtfs['shape_pt_lat'],gtfs['shape_pt_lon'])
-#             ax.set_ylim(min_lat-0.5*delta_lat,max_lat+0.5*delta_lat)
-#             ax.set_xlim(min_lon-0.5*delta_lon,max_lon+0.5*delta_lon)
-#             plt.show()
-
-#         except:
-#             publicTransit.plot_routes(G,updated_nodes,gtfs)
-
-#     return updated_nodes
-
-# def check_connectivity(G,nodes_dict):
-#     """ 
-#     checks connectivity between the candidate nodes, and removes any disjointe paths
-#     Args:
-#         G (MultiDiGraph): graph of drive network
-#         nodes_dict (dict): dict: keys are node IDs, values are list of indices where the node is duplicated
-#     Returns:
-#         list: node IDs which shows the connected route
-#     """
-#     candidate_nodes = list(nodes_dict)
-#     nodes_last_idx = [i[-1] for i in list(nodes_dict.values())]
-#     # if the route progresses naturally without hiccups, it should only traverse each node once
-#     # if there is a disjoint/disruption in the path, then the routes will not be strictly increasing
-#     # a disjoint manifest in a negative value when we take the diff
-#     negative_diff = np.diff(nodes_last_idx) # diff[i] = x[i+1] - x[i]
-#     negative_ix = np.where(negative_diff<0)[0] + 1 # returns the index where diff is negative
-#     negative_ix = negative_ix.tolist()
-#     # find the shortest path between the 2 nodes prior and after the negative_ix node
-#     updated_nodes = []
-#     counter_nix = 0
-#     current_ix = negative_ix[counter_nix]
-#     for i in range(len(candidate_nodes)):
-#         if i != current_ix:
-#             updated_nodes.append(candidate_nodes[i])
-#         else:
-#             if (i > 0) and (i < len(candidate_nodes) - 1):
-#                 nix1, nix2 = current_ix-1,current_ix+1 # the indices before and after the negative_ix nodes
-#                 print(f'{candidate_nodes[nix1]} to {candidate_nodes[nix2]}')
-#                 rerouted_route = ox.shortest_path(G, candidate_nodes[nix1], candidate_nodes[nix2], weight="travel_time")
-#                 updated_nodes.extend(rerouted_route[1:-1])
-#             else:
-#                 # if the node to remove is at the start or at the end, just skip the node
-#                 pass
-#             counter_nix += 1
-#             if counter_nix < len(negative_ix):
-#                 current_ix = negative_ix[counter_nix]
-#     return updated_nodes
-# =======PLOTTING UTILS===============
 
 def get_bus_lims(lat,lon):
     """ 
@@ -763,3 +681,50 @@ class TripItinerary:
                 'actual_total_duration':actual_total_duration,'simulated_total_duration':simulated_total_duration,
                 'non_bus_duration':non_bus_duration,'number_of_busroutes':number_of_busroutes, 'routeId':','.join(routeId),
                 }
+    
+def plot_shortest_path_publicTransit(G, itinerary_df,column_value="simulated_total_duration",ax=None,
+                                cmap="plasma",cbar=None,
+                                node_size=5,node_alpha=0.8,
+                                edge_linewidth=0.2,edge_color="#999999"):
+    """ 
+    plot the isochrone using the simulated total duration
+    Args:
+        G (MultiDiGraph): graph of car network
+        itinerary_df (pd.DataFrame): df with columns that describes the simulated or actual time
+        column_value (str): column in itinerary_df which will determine the plotting of node colors on G
+        ax (mpl.Axes): if None, plot on a new figure, else plot on supplied Axes
+        cmap (str): cmap for colouring the isochrones
+        cbar (ScalarMappable or None): if None, use cmap to automatically generate unique colours based on number of nodes. Else, use cbar to map values to colours
+        node_size (float or Iterable): size of nodes for plotting
+        node_alpha (float): transparency of nodes
+        edge_linewidth (float or Iterable): width of edges for plotting
+        edge_color (float or Iterable): colour of edges for plotting
+    Returns:
+        dict: sorted route times, where key are start_nodesID, and values are route times
+    """
+    # create a dict where key are start_nodesID, and values are route times
+    route_times = itinerary_df[['start_nodesID',column_value]].set_index('start_nodesID').to_dict()
+    route_times = route_times[column_value]
+    # sort dict based on the value i.e. route times
+    route_times = {k: v for k, v in sorted(route_times.items(), key=lambda item: item[1])}
+    # define colours mapped to route times
+    if cbar is None:
+        iso_colors = ox.plot.get_colors(n=len(route_times), cmap=cmap, start=0)
+    else:
+        iso_colors = [mpl.colors.rgb2hex(cbar.to_rgba(i),keep_alpha=True) for i in route_times.values()]
+    # map nodes to colours
+    node_colors = {node: nc_ for node, nc_ in zip(list(route_times),iso_colors)}
+    nc = [node_colors[node] if node in node_colors else "none" for node in G.nodes() ]
+    ns = [node_size if node in node_colors else 0 for node in G.nodes()]
+    fig, ax = ox.plot_graph(
+        G,
+        ax=ax,
+        node_color=nc,
+        node_size=ns,
+        node_alpha=node_alpha,
+        edge_linewidth=edge_linewidth,
+        edge_color=edge_color,
+        show = False,
+        close = False
+    )
+    return route_times
