@@ -22,7 +22,8 @@ class UpdateFloodNetwork:
         self.G = G
         self.flooded_maxspeed=flooded_maxspeed
 
-    def identify_flooded_roads(self, historical_floods,rf_value,rf_type='highest 30 min rainfall (mm)', plot = True, ax = None):
+    def identify_flooded_roads(self, historical_floods,rf_value,rf_type='highest 30 min rainfall (mm)', plot = True, ax = None,
+                               flooded_edge_color="red",edge_color="white", flooded_edge_linewidth=2):
         """ 
         identify global flooded roads based on historical flooded roads and their associated rainfall value and rainfall type
         Assumes that multiple roads are flooded simultaneously across all Singapore based on historical data
@@ -39,8 +40,8 @@ class UpdateFloodNetwork:
         flooded_edges = ox.distance.nearest_edges(self.G,X = hist_flood_filtered['longitude'], Y = hist_flood_filtered['latitude'])
         flooded_edges = list(flooded_edges)
         if plot:
-            ec = ["r" if e in flooded_edges else "white" for e in self.G.edges(keys=True) ]
-            ew = [2 if e in flooded_edges else 0.2 for e in self.G.edges(keys=True) ]
+            ec = [flooded_edge_color if e in flooded_edges else edge_color for e in self.G.edges(keys=True) ]
+            ew = [flooded_edge_linewidth if e in flooded_edges else 0.2 for e in self.G.edges(keys=True) ]
             fig, ax = ox.plot_graph(
                 self.G,
                 node_size=0,
@@ -159,6 +160,21 @@ class TravelTimeDelay:
         travel_time_delay_df['travel_time_delay'] = travel_time_delay_df['simulated_bus_duration_wet'] - travel_time_delay_df['simulated_bus_duration_dry']
         return travel_time_delay_df
     
+    def get_grouped_travel_time_delay(self, travel_time_delay_df=None):
+        """ 
+        split df based on end_nodesID
+        Args:
+            travel_time_delay_df (pd.DataFrame): Compute travel time delay and append it as a column to flooded_df. If None, call compute_travel_time_delay method
+        Returns:
+            dict: keys are end_nodesID, values are pd.DataFrame
+        """
+        if travel_time_delay_df is None:
+            travel_time_delay_df = self.compute_travel_time_delay()
+        
+        travel_time_delay_df = travel_time_delay_df.reset_index()
+        # split df based on end_nodesID
+        return {k:df for k,df in travel_time_delay_df.groupby('end_nodesID')}
+
     def plot_shortest_path_publicTransit(self,G, itinerary_df,flooded_edges=None,
                                         column_value='travel_time_delay',ax=None,
                                         flooded_edge_color="red",
@@ -166,7 +182,7 @@ class TravelTimeDelay:
                                         node_size=5,node_alpha=0.8,
                                         edge_linewidth=0.2,edge_color="#999999"):
         """ 
-        plot the isochrone using the simulated total duration
+        plot an isochrone using the simulated total duration
         Args:
             G (MultiDiGraph): graph of drive network
             itinerary_df (pd.DataFrame): df with columns that describes the simulated or actual time
@@ -220,7 +236,7 @@ class TravelTimeDelay:
                                cmap="plasma",flooded_edge_color="red",workplace_node_color="red",
                                cbar=None,save_fp=None):
         """ 
-        plot the isochrone using the simulated total duration
+        plot gridded isochrones using the simulated total duration
         Args:
             G (MultiDiGraph): graph of car network
             planningArea (gpd.GeoDataFrame): geopandas df of planning areas of SG
@@ -240,9 +256,8 @@ class TravelTimeDelay:
             dict: sorted route times, where key are start_nodesID, and values are route times
         """
         travel_time_delay_df = self.compute_travel_time_delay()
-        travel_time_delay_df = travel_time_delay_df.reset_index()
         # split df based on end_nodesID, where end_nodesID are the work place node id
-        itinerary_df_list = {k:df for k,df in travel_time_delay_df.groupby('end_nodesID')}
+        itinerary_df_list = self.get_grouped_travel_time_delay(travel_time_delay_df)
         # plot grid
         n_clusters = len(workplace_cluster.index)
         ncols = 3
@@ -274,8 +289,105 @@ class TravelTimeDelay:
         # plot colorbar
         fig.subplots_adjust(bottom=0.2)
         cbar_ax = fig.add_axes([0.15, 0.15, 0.75, 0.01]) # left, bottom, width, height
-        fig.colorbar(cbar, cax=cbar_ax, orientation='horizontal', label='Travel time (seconds)')
+        fig.colorbar(cbar, cax=cbar_ax, orientation='horizontal', label='Travel time delay (seconds)')
         if save_fp is not None:
             plt.savefig(save_fp, bbox_inches = 'tight')
         plt.show()
         return
+    
+    def get_planningArea_itinerary(self,planningArea, itinerary_df,colors=None,plot=True):
+        """
+        spatial joint of planning area and itinerary
+        Args:
+            planningArea (gpd.GeoDataFrame): geopandas df of planning areas of SG
+            itinerary_df (pd.DataFrame): outputs the updated itinerary based on flooded road conditions and travel time delay
+            colors (dict): color rgb hex code mapping to the 5 administrative districts
+        Returns:
+            gpd: spatial joint of planning area and itinerary
+        """
+        # create point geometry based on coords of nodesID
+        nodes_gdf = gpd.GeoDataFrame(
+            itinerary_df, geometry=gpd.points_from_xy(itinerary_df.start_lon, itinerary_df.start_lat), crs="EPSG:4326"
+        )
+        # spatial join to assign node points to REGION_N polygons
+        planningArea_nodes = planningArea.sjoin(nodes_gdf,how="inner",predicate='intersects')
+        # plot nodes by colors of REGION_N
+        if plot:
+            planningArea_nodes = planningArea_nodes[~planningArea_nodes['PLN_AREA_N'].str.contains("ISLAND")]
+            if colors is None:
+                colors = {'EAST REGION':"#dffeb2","WEST REGION": "#ffe7c8","CENTRAL REGION":"#bedcfd",
+                    'NORTH REGION':"#e9b3fd",'NORTH-EAST REGION':"#fdb3ba"}
+            colormap = pd.DataFrame({'colors':list(colors.values()),'REGION_N':list(colors)})
+            planningArea_nodes = planningArea_nodes.merge(colormap,on="REGION_N")
+            # plot planning area boundary
+            ax = planningArea_nodes.plot(fc="none",ec="k")
+            # planningArea_nodes = planningArea_nodes[['colors','start_lat','start_lon']]
+            gdf = gpd.GeoDataFrame(
+                planningArea_nodes[['colors']], geometry=gpd.points_from_xy(planningArea_nodes.start_lon, planningArea_nodes.start_lat), crs="EPSG:4326"
+            )
+            # plot node points by color
+            gdf.plot(column="colors",color=gdf['colors'],alpha=0.5,ax=ax)
+        
+        return planningArea_nodes
+    
+    def get_total_travel_time_delay(self,planningArea):
+        """ 
+        get total travel time delay by planning area
+        Args:
+            planningArea (gpd.GeoDataFrame): geopandas df of planning areas of SG
+            itinerary_df_list (dict): values are end_nodesID, values are gpd.DataFrame itinerary
+        Returns:
+            dict: a nested dict where 1st level of keys are end_nodesID, 2nd level of keys are REGION_N (district names), and values are travel time delay
+        """
+        # remove islands
+        planningArea = planningArea[~planningArea['PLN_AREA_N'].str.contains("ISLAND")]
+        itinerary_df_list = self.get_grouped_travel_time_delay()
+        # iterate through different itineraries
+        travelTimeDelay_districts_dict = dict()#{p:[] for p in planningArea['REGION_N'].to_list()}
+        for end_nodesID, itinerary_df in itinerary_df_list.items():
+            # get total travel time delay by district areas in Singapore (dict)
+            travelTimeDelay_districts = self.get_planningArea_itinerary(planningArea, itinerary_df,plot=False)
+            # group by REGION_N and sum up total travel time delay by REGION_N
+            travelTimeDelay_districts = travelTimeDelay_districts.groupby(['REGION_N'])['travel_time_delay'].sum().to_dict()
+            travelTimeDelay_districts_dict[end_nodesID] = travelTimeDelay_districts
+        
+        return travelTimeDelay_districts_dict
+
+    def plot_total_travel_time_delay(self,planningArea,xlabels=None,colors=None,width=0.5):
+        """ 
+        Args:
+            planningArea (gpd.GeoDataFrame): geopandas df of planning areas of SG
+            xlabels (list of str): list of x axis labels
+            colors (dict): keys are REGION_N and values are rgb hex codes for each REGION_N
+            width (float): width of each bar
+        """
+        # reorganise dict for plotting
+        travelTimeDelay_districts_dict = self.get_total_travel_time_delay(planningArea)
+        # x labels are end_nodesID
+        if xlabels is None:
+            xlabels = [str(i) for i in list(travelTimeDelay_districts_dict)] # list of end_nodesID
+        if colors is None:
+            colors = {'EAST REGION':"#dffeb2","WEST REGION": "#ffe7c8","CENTRAL REGION":"#bedcfd",
+                    'NORTH REGION':"#e9b3fd",'NORTH-EAST REGION':"#fdb3ba"}
+        # districts are stacking variable in stacked bar
+        plotting_dict = {district: [] for district in list(colors)}
+        for nodesID, travel_time_delay_dict in travelTimeDelay_districts_dict.items():
+            for district, timeDelay in travel_time_delay_dict.items():
+                plotting_dict[district].append(timeDelay)
+        # plot
+        fig, ax = plt.subplots()
+        # start baseline at 0
+        bottom = np.zeros(len(xlabels))
+        
+        # iterate through district, and cummulatively add district values "stacking"
+        for district, travel_time_delay_arr in plotting_dict.items():
+            p = ax.bar(xlabels,travel_time_delay_arr,width=width,
+                    label=district,bottom=bottom,color=colors[district])
+            bottom += travel_time_delay_arr
+        
+        ax.set_title("Total travel time delay from administrative districts to workclusters ID")
+        # rotate node ID 45 deg
+        ax.set_xticklabels(xlabels,rotation=45,ha='right')
+        ax.legend(bbox_to_anchor=(1.05,-0.2),ncols=3)
+        plt.show()
+        return 
