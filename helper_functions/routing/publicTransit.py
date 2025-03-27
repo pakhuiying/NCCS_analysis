@@ -551,7 +551,7 @@ def public_transit_routing(origin_coord, origin_key, destination_coord, destinat
     return save_itinerary
 
 class TripItinerary:
-    """helper functions for processing itinerary json file into a consolidated pd.DataFrame"""
+    """helper functions for processing public transit itinerary json file into a consolidated pd.DataFrame"""
     def __init__(self,G, itinerary):
         """ 
         Args:
@@ -656,7 +656,7 @@ class TripItinerary:
     def get_itinerary_entry(self):
         """ 
         Returns:
-            dict: for an entry of a pandas row, to be consolidated when calling pd.DataFrame.from_records
+            dict: for an entry of a pandas row, to be consolidated into a df when calling pd.DataFrame.from_records
         """
         start_lat = self.itinerary['busStart'][0]
         start_lon = self.itinerary['busStart'][1]
@@ -682,49 +682,3 @@ class TripItinerary:
                 'non_bus_duration':non_bus_duration,'number_of_busroutes':number_of_busroutes, 'routeId':','.join(routeId),
                 }
     
-def plot_shortest_path_publicTransit(G, itinerary_df,column_value="simulated_total_duration",ax=None,
-                                cmap="plasma",cbar=None,
-                                node_size=5,node_alpha=0.8,
-                                edge_linewidth=0.2,edge_color="#999999"):
-    """ 
-    plot the isochrone using the simulated total duration
-    Args:
-        G (MultiDiGraph): graph of car network
-        itinerary_df (pd.DataFrame): df with columns that describes the simulated or actual time
-        column_value (str): column in itinerary_df which will determine the plotting of node colors on G
-        ax (mpl.Axes): if None, plot on a new figure, else plot on supplied Axes
-        cmap (str): cmap for colouring the isochrones
-        cbar (ScalarMappable or None): if None, use cmap to automatically generate unique colours based on number of nodes. Else, use cbar to map values to colours
-        node_size (float or Iterable): size of nodes for plotting
-        node_alpha (float): transparency of nodes
-        edge_linewidth (float or Iterable): width of edges for plotting
-        edge_color (float or Iterable): colour of edges for plotting
-    Returns:
-        dict: sorted route times, where key are start_nodesID, and values are route times
-    """
-    # create a dict where key are start_nodesID, and values are route times
-    route_times = itinerary_df[['start_nodesID',column_value]].set_index('start_nodesID').to_dict()
-    route_times = route_times[column_value]
-    # sort dict based on the value i.e. route times
-    route_times = {k: v for k, v in sorted(route_times.items(), key=lambda item: item[1])}
-    # define colours mapped to route times
-    if cbar is None:
-        iso_colors = ox.plot.get_colors(n=len(route_times), cmap=cmap, start=0)
-    else:
-        iso_colors = [mpl.colors.rgb2hex(cbar.to_rgba(i),keep_alpha=True) for i in route_times.values()]
-    # map nodes to colours
-    node_colors = {node: nc_ for node, nc_ in zip(list(route_times),iso_colors)}
-    nc = [node_colors[node] if node in node_colors else "none" for node in G.nodes() ]
-    ns = [node_size if node in node_colors else 0 for node in G.nodes()]
-    fig, ax = ox.plot_graph(
-        G,
-        ax=ax,
-        node_color=nc,
-        node_size=ns,
-        node_alpha=node_alpha,
-        edge_linewidth=edge_linewidth,
-        edge_color=edge_color,
-        show = False,
-        close = False
-    )
-    return route_times

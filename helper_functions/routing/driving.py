@@ -12,6 +12,46 @@ import shapely.ops as so
 import pandas as pd
 import numpy as np
 
+class CarTrip:
+    def __init__(self, G,workplace_cluster):
+        """ 
+        Args:
+            G (G): driving network
+            workplace_cluster (pd.DataFrame): dataframe that shows the coordinates of workplace nodes and nodesId
+        """
+        self.G = G
+        self.workplace_cluster = workplace_cluster
+    
+    def get_itinerary_entry(self,cost="travel_time"):
+        """ 
+        Args:
+            cost (str): name of the attribute in edges that define the cost for determining the shortest path
+        Returns:
+            pd.DataFrame: total travel time (in seconds) from orig to dest along the shortest path 
+        """
+        # convert nodes into coordinates
+        nodes_gdf = ox.graph_to_gdfs(self.G,nodes=True, edges=False)
+        nodes_gdf = nodes_gdf[['y','x']].reset_index()
+        nodes_gdf = nodes_gdf.rename(columns={"osmid":"start_nodesID","y":"start_lat","x":"start_lon"})
+        df_list = []
+        for row_ix,row in self.workplace_cluster.iterrows():
+            node_id = row['node_ID']
+            end_lat = row['latitude']
+            end_lon = row['longitude']
+            # returns a dict keyed by target, values are shortest path length from the source to the target
+            route_times = nx.shortest_path_length(self.G,source=node_id, target=None, weight=cost)
+            df = pd.DataFrame({'start_nodesID': list(route_times),'simulated_total_duration': list(route_times.values())})
+            df['end_nodesID'] = node_id
+            df['end_lat'] = end_lat
+            df['end_lon'] = end_lon
+            df_list.append(df)
+        itinerary_df = pd.concat(df_list)
+        # merge nodes_gdf and itinerary_df
+        itinerary_df = itinerary_df.merge(nodes_gdf,how="left",on="start_nodesID")
+        # cast as int64
+        itinerary_df[['start_nodesID','end_nodesID']] = itinerary_df[['start_nodesID','end_nodesID']].astype(int)
+        return itinerary_df
+    
 def get_shortest_path_driving(G, orig, dest=None,
                                 cost="travel_time",cmap="plasma",cbar=None,node_size=5,
                                 plot = True, ax=None):
