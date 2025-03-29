@@ -271,7 +271,8 @@ def dict_to_dataframe(flood_dict,save_dir = None):
         df.to_csv(os.path.join(save_dir,"precipitation_levels_during_flood_events.csv"),index=False)
     return df
 
-def plot_grouped_boxplot(data,ax=None,colors=None, hatches=[None,'.','o', 'O'],show_fliers = True):
+def plot_grouped_boxplot(data,ax=None,group_colors=None,subgroup_colors=None,sym="+",
+                         subgroup_hatches=[None,'.','o', 'O'],vert=True,cmap='plasma',show_fliers = True,figsize=None):
     """ 
     Args:
         data (dict): data is arranged by each distinct group
@@ -281,8 +282,10 @@ def plot_grouped_boxplot(data,ax=None,colors=None, hatches=[None,'.','o', 'O'],s
             }
             where groups A,B,C are the tick labels, and A1,A2,A3 are the sub boxplots within A
         ax (mpl.Axes): if no axis is supplied, a new figure is created. Else, artists is drawn on supplied ax
-        colors (list): list of hex colours
-        hatches (list): list of hatches symbols e.g. '/', '\', '|', '-', '+', 'x', 'o', 'O', '.', '*'
+        group_colors (list): list of hex colours for groups e.g. A, B, C have different colors, and subgroups within A have same color
+        subgroup_colors (list): list of hex colours e.g. sub groups within A have different colors
+        subgroup_hatches (list): list of hatches symbols e.g. '/', '\', '|', '-', '+', 'x', 'o', 'O', '.', '*'
+        vert (bool): whether to plot the boxplot vertically (vert=True) or horizontally (vert=False)
         show_fliers (bool): if True, it will show the fliers (aka outliers). Else, fliers will be hidden. Default is True.
     """
 
@@ -302,9 +305,7 @@ def plot_grouped_boxplot(data,ax=None,colors=None, hatches=[None,'.','o', 'O'],s
                 .   - dots
                 *   - stars
         """
-        # plt.setp(bp['boxes'], color=colors)
-        # plt.setp(bp['whiskers'], color=colors)
-        # plt.setp(bp['caps'], color=colors)
+
         plt.setp(bp['medians'], color='black',linewidth=2)
         for box,color in zip(bp['boxes'],colors):
             # change outline color
@@ -320,14 +321,12 @@ def plot_grouped_boxplot(data,ax=None,colors=None, hatches=[None,'.','o', 'O'],s
                 box.set_hatch(hatch)
 
     if ax is None:
-        fig, ax = plt.subplots()
+        fig, ax = plt.subplots(figsize=figsize)
 
     ticks = list(data) # names of the groups
     # number of observations in each group
     num_obs = {group: len(subgroups[list(subgroups)[0]]) for group,subgroups in data.items() }
-    # get colormap based on frequency of obs
-    cmap = plt.get_cmap('plasma')
-    norm = plt.Normalize(min(list(num_obs.values())), max(list(num_obs.values()))) # a function
+    
     # colors = {group: cmap(norm(n)) for group,n in num_obs.items()}
     # hatch for subplots 
     # hatches = [None,'.','o', 'O']
@@ -336,22 +335,31 @@ def plot_grouped_boxplot(data,ax=None,colors=None, hatches=[None,'.','o', 'O'],s
     # subplot names
     subplot_names = list(subplot_data)
 
-    # plot each subplot
+    # plot each subgroup
     for i,(subgroups, subgroup_data) in enumerate(subplot_data.items()):
         if show_fliers is True:
-            bp = ax.boxplot(subgroup_data, positions=np.array(range(len(subgroup_data)))*2.0+i*0.4, 
-                            widths=0.3,patch_artist=True)
+            bp = ax.boxplot(subgroup_data, sym=sym,positions=np.array(range(len(subgroup_data)))*2.0+i*0.4, 
+                            vert=vert,widths=0.3,patch_artist=True)
         else:
-            bp = ax.boxplot(subgroup_data, positions=np.array(range(len(subgroup_data)))*2.0+i*0.4, 
-                            widths=0.3,patch_artist=True, sym = '')
+            bp = ax.boxplot(subgroup_data, sym=sym,positions=np.array(range(len(subgroup_data)))*2.0+i*0.4, 
+                            vert=vert,widths=0.3,patch_artist=True)
         # set_box_color(bp, colors=list(colors.values()),hatch = hatches[i])
-        if colors is None:
-            set_box_color(bp, colors=[cmap(i) for i in np.linspace(0,1,len(ticks))],hatch = hatches[i])
-        else:
-            assert len(ticks) == len(colors),"length of colours == length of groups/ticks"
-            set_box_color(bp, colors=colors,hatch = hatches[i])
+        if subgroup_colors is not None:
+            # assert len(ticks) == len(group_colors),"length of colours != length of groups or ticks"
+            set_box_color(bp, colors=[subgroup_colors[i]]*len(bp['boxes']),
+                          hatch = subgroup_hatches[i])
+        
+        if group_colors is not None:
+            # assert len(ticks) == len(group_colors),"length of colours != length of groups or ticks"
+            set_box_color(bp, colors=group_colors,hatch = subgroup_hatches[i])
 
-    ax.set_xticks(range(0, len(ticks) * 2, 2), [f'{group}\n(N = {obs})' for group,obs in num_obs.items()])
+    if vert is False:
+        # plot horizontal box plot
+        ax.set_yticks(range(0, len(ticks) * 2, 2), [f'{group}\n(N = {obs})' for group,obs in num_obs.items()])
+        ax.invert_yaxis() # labels read top-to-bottom
+    else:
+        # plot vertical box plot
+        ax.set_xticks(range(0, len(ticks) * 2, 2), [f'{group}\n(N = {obs})' for group,obs in num_obs.items()])
     
     if ax is None:
         plt.legend()
@@ -377,7 +385,7 @@ def plot_boxplots_floods_by_drainage(boxplot_data,show_fliers = True,save_dir=No
     colors = [colormap[drainage_c] for drainage_c in list(boxplot_data)]
     
     fig, ax = plt.subplots(figsize=(15,5))
-    plot_grouped_boxplot(boxplot_data,ax=ax,colors=colors,show_fliers = show_fliers)
+    plot_grouped_boxplot(boxplot_data,ax=ax,group_colors=colors,show_fliers = show_fliers)
     ax.set_ylabel('Precipitation (mm)')
     ax.set_xlabel('Drainage catchment')
     for label in ax.get_xticklabels(which='major'):
