@@ -8,6 +8,7 @@ import os
 import pandas as pd
 import numpy as np
 import copy
+import warnings
 import helper_functions.routing.publicTransit as publicTransit
 import helper_functions.routing.driving as driving
 import helper_functions.plot_utils as plot_utils
@@ -166,6 +167,10 @@ class TravelTimeDelay:
         self.dry_df = dry_df
         self.planningArea = planningArea
         self.column_value = column_value
+        if len(self.flooded_df.index) != len(self.dry_df.index):
+            warnings.warn(f"flooded_df {(len(self.flooded_df.index))} do not have the same length as dry_df ({len(self.dry_df.index)})!")
+
+        
 
     def compute_travel_time_delay(self):
         """ 
@@ -173,11 +178,21 @@ class TravelTimeDelay:
         Returns:
             pd.DataFrame: Compute travel time delay and append it as a column to flooded_df
         """
-        flooded_df = self.flooded_df.copy()
-        flooded_df.set_index(['start_nodesID','end_nodesID'],inplace=True)
-        dry_df = self.dry_df.copy()
-        dry_df.set_index(['start_nodesID','end_nodesID'],inplace=True)
-        travel_time_delay_df = flooded_df.join(dry_df[[self.column_value]],how='inner',lsuffix='_wet',rsuffix='_dry')
+        # check if both column values are same along rows (i.e. on axis=1), and then check if there are any False values
+        check_matching_keys = self.flooded_df[["start_nodesID","end_nodesID"]].eq(self.dry_df[["start_nodesID","end_nodesID"]]).all(axis=1).all()
+        if (check_matching_keys is np.True_):
+            travel_time_delay_df = self.flooded_df.copy()
+            travel_time_delay_df = travel_time_delay_df.rename(columns={self.column_value: f'{self.column_value}_wet'})
+            # direct assigning is used for public transit because 'start_nodesID','end_nodesID' are not unique keys, and merging will not be 1:1
+            travel_time_delay_df[f'{self.column_value}_dry'] = self.dry_df[self.column_value]
+        else:
+            flooded_df = self.flooded_df.copy()
+            flooded_df.set_index(['start_nodesID','end_nodesID'],inplace=True)
+            dry_df = self.dry_df.copy()
+            dry_df.set_index(['start_nodesID','end_nodesID'],inplace=True)
+            # if the indices are all unique, only allow for 1:1 join
+            travel_time_delay_df = flooded_df.join(dry_df[[self.column_value]],how='inner',lsuffix='_wet',rsuffix='_dry',validate="1:1")
+        # compute travel time delay column
         travel_time_delay_df['travel_time_delay'] = travel_time_delay_df[f'{self.column_value}_wet'] - travel_time_delay_df[f'{self.column_value}_dry']
         return travel_time_delay_df
     
