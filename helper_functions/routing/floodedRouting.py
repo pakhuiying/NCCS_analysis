@@ -367,10 +367,10 @@ class TravelTimeDelay:
                 #                         'N_routes':N_routes}
             summary_stats[end_nodesID] = region_stats
 
-        # summarise it in a table
-        summary_travel_time_delay = self.get_table_travel_time_delay(summary_stats)
         # export as csv
         if save_fp is not None:
+            # summarise it in a table
+            summary_travel_time_delay = self.get_table_travel_time_delay(summary_stats)
             summary_travel_time_delay.to_csv(save_fp,index=False)
 
         return summary_stats
@@ -415,23 +415,70 @@ class TravelTimeDelay:
         routeId = list(set(routeId))
         return routeId
 
-    def plot_bus_services_heatmap(self, travel_time_delay_df=None,stats_travel_time_delay=None):
+    def plot_bus_services_disruption(self, itinerary_df=None,figsize=(7,8),save_fp=None):
         """ 
-        split df based on end_nodesID
+        plot top 3 bus services affected as a function of OD and chances of the bus service being disrupted
         Args:
-            travel_time_delay_df (pd.DataFrame): Compute travel time delay and append it as a column to flooded_df. If None, call compute_travel_time_delay method
-            stats_travel_time_delay (dict): output of get_stats_travel_time_delay
-        Returns:
-            dict: keys are end_nodesID, values are pd.DataFrame
+            itinerary_df (pd.DataFrame): spatial joint of planning area and itinerary_df (output from get_planningArea_itinerary)
+            figsize (tuple): adjust figsize of matplotlib plot
+            save_fp (str): filepath to save the figure to
         """
-        # get sorted padded unique bus services
-        routeId = self.get_all_bus_services(travel_time_delay_df)
         
-        if stats_travel_time_delay is None:
-            stats_travel_time_delay = self.get_stats_travel_time_delay()
+        stats_travel_time_delay = self.get_stats_travel_time_delay(itinerary_df)
 
-        nrow = len(routeId)
-        n_end_nodesID = list(stats_travel_time_delay)
-        n_regions = list(stats_travel_time_delay[n_end_nodesID[0]])
-        ncol = int(len(n_end_nodesID)*len(n_regions))
+        ylabel_text_style = dict(horizontalalignment='right', verticalalignment='center',
+                  fontsize=8)
+        ax_text_style = dict(horizontalalignment='center', verticalalignment='center',
+                    fontsize=8,weight='bold')
+        bus_text_style = dict(horizontalalignment='center', verticalalignment='center',
+                    fontsize=8, fontfamily='monospace',weight='bold')
+        freq_text_style = dict(horizontalalignment='center', verticalalignment='center',
+                    fontsize=6)
+        marker_style = dict(linestyle=':', color='0.8', markersize=15,
+                            markerfacecolor="#9eeb34", markeredgecolor="#9eeb34")
+
+        def format_axes(ax):
+            ax.margins(0.2)
+            ax.set_axis_off()
+            ax.invert_yaxis()
+
+        fig, axes = plt.subplots(ncols = 5,figsize=figsize)
+
+        for row_ix, (end_nodesID, end_nodesID_df) in enumerate(stats_travel_time_delay.items()):
+            for col_ix, (ax, (region, region_df)) in enumerate(zip(axes,end_nodesID_df.items())):
+                buses_disrupted = region_df['summary_buses_delayed']
+                # total number of routes simulated (flooded and non-flooded) from a region to end_nodesID
+                N_routes = region_df['N_routes']
+                # sort bus services by the number of disruptions
+                sorted_buses_disrupted = {k: v for k, v in sorted(buses_disrupted.items(), key=lambda item: item[1],reverse=True)}
+                # list out top 3 bus services affected
+                bus3 = list(sorted_buses_disrupted)[:3]
+                # number of unique bus services disrupted
+                # n_buses = len(list(buses_disrupted))
+                # number of disruptions for the top 3 bus services affected
+                nDisruption = list(sorted_buses_disrupted.values())[:3]
+                # chance of a bus service being disrupted is calculated as number of disruptions (on diff routes) for a particular bus service divided by number of routes
+                chance_of_disruption = [d/N_routes for d in nDisruption]
+                # print(nDisruption)
+                # row_label = f'{region}' r"$\rightarrow$" f'{end_nodesID}'
+                # label rows
+                if col_ix == 0:
+                    # y axis label, only do it for the first column axes
+                    ax.text(-0.5, row_ix, f'{end_nodesID}', **ylabel_text_style)
+                # add region name as title
+                ax.set_title(region,**ax_text_style)
+                # add bus icons as square markers
+                ax.plot([row_ix] * 3, marker='s', **marker_style)
+                for i in range(3):
+                    # add chance of disruption as text above the buses
+                    ax.text(i, row_ix+0.3, f'{chance_of_disruption[i]:.3f}', **freq_text_style)
+                    # add bus service ID
+                    ax.text(i, row_ix, bus3[i].upper(), **bus_text_style)
+                # format axes
+                format_axes(ax)
+        plt.tight_layout()
+        if save_fp is not None:
+            plt.savefig(save_fp, bbox_inches = 'tight')
+        plt.show()
+        return
 
