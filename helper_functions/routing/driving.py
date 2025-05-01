@@ -38,12 +38,16 @@ class CarTrip:
             node_id = row['node_ID']
             end_lat = row['latitude']
             end_lon = row['longitude']
+            PLN_AREA_N = row['PLN_AREA_N']
+            REGION_N = row['REGION_N']
             # returns a dict keyed by target, values are shortest path length from the source to the target
             route_times = nx.shortest_path_length(self.G,source=node_id, target=None, weight=cost)
             df = pd.DataFrame({'start_nodesID': list(route_times),'simulated_total_duration': list(route_times.values())})
             df['end_nodesID'] = node_id
             df['end_lat'] = end_lat
             df['end_lon'] = end_lon
+            df['PLN_AREA_N'] = PLN_AREA_N
+            df['REGION_N'] = REGION_N
             df_list.append(df)
         itinerary_df = pd.concat(df_list)
         # merge nodes_gdf and itinerary_df

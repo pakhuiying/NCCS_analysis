@@ -7,3 +7,5 @@ Flood_Weather_Data/
 cache
 data/
 reanalysis*
+data_itineraries/
+ArcGIS*

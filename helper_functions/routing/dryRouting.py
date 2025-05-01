@@ -12,6 +12,7 @@ import helper_functions.routing.publicTransit as publicTransit
 import helper_functions.routing.driving as driving
 import helper_functions.routing.floodedRouting as floodedRouting
 import helper_functions.plot_utils as plot_utils
+from math import ceil
 
 class PlotIsochrone:
     def __init__(self, G, master_itinerary_df, planningArea):
@@ -25,16 +26,18 @@ class PlotIsochrone:
         self.master_itinerary_df = master_itinerary_df
         self.planningArea = planningArea
 
-    def get_grouped_itinerary_df(self):
+    def get_grouped_itinerary_df(self,groupby_name="PLN_AREA_N"):
         """ 
-        split df based on end_nodesID
+        split df based on groupby_name e.g. end_nodesID
+        Args:
+            groupby_name (str): column name of the itinerary df to group_by
         Returns:
-            dict: keys are end_nodesID, values are pd.DataFrame
+            dict: keys are groupby_name, values are pd.DataFrame
         """
         # reset index
         master_itinerary_df = self.master_itinerary_df.reset_index()
         # split df based on end_nodesID
-        return {k:df for k,df in master_itinerary_df.groupby('end_nodesID')}
+        return {k:df for k,df in master_itinerary_df.groupby(groupby_name)}
 
     def plot_shortest_path_route(self,itinerary_df,column_value,
                                     flooded_edges=None,ax=None,
@@ -94,20 +97,22 @@ class PlotIsochrone:
         
         return route_times
 
-    def plot_isochrone(self, column_value, flooded_edges=None,
+    def plot_isochrone(self, itinerary_df_list, column_value, flooded_edges=None,
                             cmap="plasma",flooded_edge_color="red",
-                            title="",colorbar_label="",
+                            title="",colorbar_label="",ncols=5,
                             workplace_node_color="red",
                             cbar=None,save_fp=None):
         """ 
         plot gridded isochrones using the simulated total duration
         Args:
+            itinerary_df_list (dict): keys are groupby_name, values are pd.DataFrame
             column_value (str): column in itinerary_df which will determine the plotting of node colors on G e.g. travel_time_delay or simulated_total_travel_time
             flooded_edges (list): list of edges in G representing flooded roads. Default is None, it wont plot flooded edges
             cmap (str): cmap for colouring the isochrones
             flooded_edge_color (str): color for showing flooded roads
             title (str): title for figure
             colorbar_label (str): label for colorbar e.g. Total travel time delay (s)
+            ncols (int): number of columns in figure
             workplace_node_color (str): color for showing destination aka workplace node
             cbar (ScalarMappable or None): if None, use cmap to automatically generate unique colours based on number of nodes. Else, use cbar to map values to colours
                 Define cbar: cbar = plot_utils.get_colorbar(vmin=0,vmax=3600,cmap="plasma",plot=False)
@@ -116,22 +121,23 @@ class PlotIsochrone:
             dict: sorted route times, where key are start_nodesID, and values are route times
         """
         # split df based on end_nodesID, where end_nodesID are the work place node id
-        itinerary_df_list = self.get_grouped_itinerary_df()
+        # itinerary_df_list = self.get_grouped_itinerary_df()
         # plot grid
         n_clusters = len(list(itinerary_df_list))
-        ncols = 3
-        nrows = n_clusters//ncols
+        nrows = ceil(n_clusters/ncols)
         if cbar is None:
             # define cbar 
             cbar = plot_utils.get_colorbar(vmin=0,vmax=self.master_itinerary_df[column_value].max(),cmap=cmap,plot=False)
         # plot
         fig, axes = plt.subplots(nrows, ncols, figsize = (ncols*4,nrows*3))
-        for i, ((node_id,itinerary_df),ax) in enumerate(zip(itinerary_df_list.items(),axes.flatten())):
+        for i, ((PLN_AREA_N,itinerary_df),ax) in enumerate(zip(itinerary_df_list.items(),axes.flatten())):
             # plot planning area boundary
             self.planningArea.plot(fc='white',ec='k',ax=ax)
             # get coordinates of the end_nodesID, all end coordinates are the same after splitting by end_nodesID
             lat = itinerary_df["end_lat"].values[0]
             lon = itinerary_df["end_lon"].values[0]
+            # PLN_AREA_N = itinerary_df["PLN_AREA_N"].values[0]
+            REGION_N = itinerary_df["REGION_N"].values[0]
             # remove itineraries where there are no bus routes 
             try:
                 # (only applicable for bus)
@@ -145,10 +151,14 @@ class PlotIsochrone:
                                             )
             # plot orig node
             ax.scatter(lon,lat,marker="X",c=workplace_node_color,s=25,label="Workplace node")
-            # add figure label and title
-            ax.set_title(f'({chr(97+i)}) {node_id}')
+            # add figure label and title 
+            # add subplot label ({chr(97+i)}) 
+            ax.set_title(f'{PLN_AREA_N} ({REGION_N})')
         
-        
+        # remove axis borders for blank axes
+        emptyAxis = (ncols*nrows) - n_clusters
+        for i in range(emptyAxis):
+            axes[-1,-i-1].axis('off')
         # plot colorbar
         fig.subplots_adjust(bottom=0.2)
         cbar_ax = fig.add_axes([0.15, 0.15, 0.75, 0.01]) # left, bottom, width, height
