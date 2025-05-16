@@ -550,6 +550,120 @@ def public_transit_routing(origin_coord, origin_key, destination_coord, destinat
             print('Object is not serializable as JSON')
     return save_itinerary
 
+class PublicTransitRouting:
+    def __init__(self, G, itinerary,itinerary_index=0):
+        """ 
+        Args:
+            G (MultiDiGraph): graph of drive bus network
+            itinerary (dict): itinerary from OneMap API
+            itinerary_index (int): index of the itinerary to extract bus legs from
+        """
+        self.G = G
+        self.itinerary = itinerary
+        self.itinerary_index = itinerary_index
+    
+    @classmethod
+    def from_file(cls, G, fp):
+        """ defines factory method that returns an instance of the class
+        Args:
+            G (MultiDiGraph): graph of drive bus network
+            fp (str): filepath to itinerary json file
+        Returns:
+            dict: itinerary object
+        """
+        itinerary = utils.load_json(fp)
+        return cls(G, itinerary)
+    
+    def get_busLegs(self,plot=True):
+        """ get bus legs from the itinerary
+        Args:
+            itinerary_index (int): index of the itinerary to extract bus legs from
+            plot (bool): if True, plot shortest bus route
+        Returns:
+            list: list of bus legs in the itinerary
+            error_flag (bool): if True, there is an error in the vehicle routing
+        """
+        # intialise flag to identify any errors in the vehicle routing
+        error_flag = False
+        # get bus legs from the FIRST itinerary
+        OMI = OneMapItinerary(itinerary=self.itinerary['plan']['itineraries'][self.itinerary_index])
+        # concatenate all bus legs to get the intermediate bus stops
+        # list of dataframes, where each dataframe represent the bus routes
+        busLeg_dfs = OMI.get_bus_routes()
+        # initialise empty list to store data
+        busLegs = []
+        # iterate across different busLeg
+        for busLeg_number in range(len(busLeg_dfs)):
+            busLeg = OMI.busLegs[busLeg_number]
+            # get bus leg meta data
+            duration = busLeg.duration
+            distance = busLeg.distance
+            startTime = busLeg.startTime
+            endTime = busLeg.endTime
+            tripId = busLeg.tripId
+            tripDirection = int(tripId.split('-')[1]) - 1
+            mode = busLeg.mode
+            routeId = busLeg.routeId
+            legGeometry = busLeg.legGeometry
+            # get bus leg df
+            busLeg_df = busLeg_dfs[busLeg_number]
+            busLeg_dict = busLeg_df.to_dict('records')
+            try:
+                # try to get routing from osmnx graph
+                BSR = BusStopRoutes(G=self.G,gtfs=busLeg_df,lat_name='lat',lon_name='lon')
+                route_nodesID = BSR.busRoute_shortestPath(plot=plot)
+            except:
+                # if there is an error, means not vehicle route can be found, then set route_nodesID to None
+                route_nodesID = None
+                error_flag = True
+
+            save_busLeg = {'leg_number': busLeg_number,
+                       'duration': duration,
+                       'distance': distance,
+                       'startTime': startTime,
+                       'endTime': endTime,
+                       'tripId': tripId,
+                       'tripDirection': tripDirection,
+                       'mode': mode,
+                       'routeId': routeId,
+                       'legGeometry': legGeometry,
+                       'busLeg': busLeg_dict,
+                       'routesNodesID': route_nodesID
+                       }
+            busLegs.append(save_busLeg)
+        return busLegs, error_flag
+    
+    def get_itinerary(self,save_fp=None):
+        """ 
+        Information captured for an individual OD journey.
+        Args:
+            save_fp (str or None): exports the itinerary as json data
+        """
+        busLegs, error_flag = self.get_busLegs(plot=False)
+        # get itinerary meta data
+        fromPlace = self.itinerary['requestParameters']['fromPlace']
+        start_lat,start_lon = [float(i) for i in fromPlace.split(",")]
+        toPlace = self.itinerary['requestParameters']['toPlace']
+        end_lat, end_lon = [float(i) for i in toPlace.split(",")]
+        # itinerary
+        itinerary = self.itinerary['plan']['itineraries'][self.itinerary_index]
+
+        save_itinerary = {'start_lat':start_lat,'start_lon':start_lon,
+                          'end_lat':end_lat,'end_lon':end_lon,
+                      'duration': itinerary['duration'], # in seconds
+                      'startTime': itinerary['startTime'],
+                      'endTime': itinerary['endTime'],
+                      'transitTime': itinerary['transitTime'],
+                      'waitingTime': itinerary['waitingTime'],
+                      'transfers': itinerary['transfers'],
+                      'itinerary_index': self.itinerary_index,
+                        'error_flag': error_flag,
+                      'busLegs': busLegs
+                      }
+        if save_fp is not None:
+            # export as json
+            utils.json_data(save_itinerary, save_fp)
+        return save_itinerary
 class TripItinerary:
     """helper functions for processing public transit itinerary json file into a consolidated pd.DataFrame"""
     def __init__(self,G, itinerary):
@@ -560,6 +674,7 @@ class TripItinerary:
         """
         self.G = G
         self.itinerary = itinerary
+        self.error_flag = self.itinerary['error_flag']
 
     @classmethod
     def from_file(cls, G, fp):
@@ -634,8 +749,10 @@ class TripItinerary:
             xlim_factor (float): expand plot xlimits based on coordinates limits
             ylim_factor (float): expand plot ylimits based on coordinates limits
         """
-        start_coords = self.itinerary['busStart'][:2]
-        end_coords = self.itinerary['workEnd'][:2]
+        # start_coords = self.itinerary['busStart'][:2]
+        # end_coords = self.itinerary['workEnd'][:2]
+        start_coords = self.itinerary['start_lat'],self.itinerary['start_lon']
+        end_coords = self.itinerary['end_lat'],self.itinerary['end_lon']
         # get graph limits
         min_lat,max_lat,delta_lat,min_lon,max_lon,delta_lon = self.bounding_box_coords(start_coords,end_coords)
         
@@ -644,41 +761,53 @@ class TripItinerary:
                                     ax=ax,show=False,close=False)
         
         # plot orig node
-        ax.scatter(start_coords[1],start_coords[0],marker="X",c="g",s=25)
+        # ax.scatter(start_coords[1],start_coords[0],marker="X",c="g",s=25)
+        ax.scatter(self.itinerary['start_lon'],self.itinerary['start_lat'],marker="X",c="g",s=25)
         # plot end node
-        ax.scatter(end_coords[1],end_coords[0],marker="X",c="r",s=25)
+        # ax.scatter(end_coords[1],end_coords[0],marker="X",c="r",s=25)
+        ax.scatter(self.itinerary['end_lon'],self.itinerary['end_lat'],marker="X",c="r",s=25)
 
         # set graph lims
         ax.set_ylim(min_lat-ylim_factor*delta_lat,max_lat+ylim_factor*delta_lat)
         ax.set_xlim(min_lon-xlim_factor*delta_lon,max_lon+xlim_factor*delta_lon)
         return
 
-    def get_itinerary_entry(self):
+    def get_itinerary_entry(self, return_generator = False):
         """ 
+        Args:
+            return_generator (bool): If True, yield dict
         Returns:
             dict: for an entry of a pandas row, to be consolidated into a df when calling pd.DataFrame.from_records
         """
-        start_lat = self.itinerary['busStart'][0]
-        start_lon = self.itinerary['busStart'][1]
-        end_lat = self.itinerary['workEnd'][0]
-        end_lon = self.itinerary['workEnd'][1]
-        actual_total_duration, actual_bus_duration = self.get_non_bus_duration()
-        non_bus_duration = actual_total_duration - actual_bus_duration
-        routes, routeId, _ = self.get_itinerary_bus_routes()
-        actual_bus_distance = sum([float(busLeg['distance']) for busLeg in self.itinerary['busLegs']])
-        simulated_bus_distance = simulated_bus_duration = 0
-        for r in routes:
-            route_length,route_time = self.get_route_time_and_distance(r)
-            simulated_bus_distance += route_length
-            simulated_bus_duration += route_time
-        number_of_busroutes = len(self.itinerary['busLegs'])
-        simulated_total_duration = non_bus_duration + simulated_bus_duration
-        return {'start_lat':start_lat,'start_lon':start_lon,'end_lat':end_lat,'end_lon':end_lon,
-                'duration':self.itinerary['duration'],'transitTime':self.itinerary['transitTime'],
-                'waitingTime':self.itinerary['waitingTime'],'transfers':self.itinerary['transfers'],
-                'actual_bus_duration':actual_bus_duration,'simulated_bus_duration':simulated_bus_duration,
-                'actual_bus_distance':actual_bus_distance,'simulated_bus_distance':simulated_bus_distance,
-                'actual_total_duration':actual_total_duration,'simulated_total_duration':simulated_total_duration,
-                'non_bus_duration':non_bus_duration,'number_of_busroutes':number_of_busroutes, 'routeId':','.join(routeId),
-                }
+        # start_lat = self.itinerary['busStart'][0]
+        # start_lon = self.itinerary['busStart'][1]
+        # end_lat = self.itinerary['workEnd'][0]
+        # end_lon = self.itinerary['workEnd'][1]
+        if self.error_flag is False:
+            start_lat = self.itinerary['start_lat']
+            start_lon = self.itinerary['start_lon']
+            end_lat = self.itinerary['end_lat']
+            end_lon = self.itinerary['end_lon']
+            actual_total_duration, actual_bus_duration = self.get_non_bus_duration()
+            non_bus_duration = actual_total_duration - actual_bus_duration
+            routes, routeId, _ = self.get_itinerary_bus_routes()
+            actual_bus_distance = sum([float(busLeg['distance']) for busLeg in self.itinerary['busLegs']])
+            simulated_bus_distance = simulated_bus_duration = 0
+            for r in routes:
+                route_length,route_time = self.get_route_time_and_distance(r)
+                simulated_bus_distance += route_length
+                simulated_bus_duration += route_time
+            number_of_busroutes = len(self.itinerary['busLegs'])
+            simulated_total_duration = non_bus_duration + simulated_bus_duration
+            return_dict = {'start_lat':start_lat,'start_lon':start_lon,'end_lat':end_lat,'end_lon':end_lon,
+                    'duration':self.itinerary['duration'],'transitTime':self.itinerary['transitTime'],
+                    'waitingTime':self.itinerary['waitingTime'],'transfers':self.itinerary['transfers'],
+                    'actual_bus_duration':actual_bus_duration,'simulated_bus_duration':simulated_bus_duration,
+                    'actual_bus_distance':actual_bus_distance,'simulated_bus_distance':simulated_bus_distance,
+                    'actual_total_duration':actual_total_duration,'simulated_total_duration':simulated_total_duration,
+                    'non_bus_duration':non_bus_duration,'number_of_busroutes':number_of_busroutes, 'routeId':','.join(routeId),
+                    }
+            
+            return return_dict
+        
     

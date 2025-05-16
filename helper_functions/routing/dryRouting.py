@@ -101,7 +101,8 @@ class PlotIsochrone:
                             cmap="plasma",flooded_edge_color="red",
                             title="",colorbar_label="",ncols=5,
                             workplace_node_color="red",
-                            cbar=None,save_fp=None):
+                            cbar=None,cbar_orientation="horizontal",
+                            save_fp=None):
         """ 
         plot gridded isochrones using the simulated total duration
         Args:
@@ -116,6 +117,7 @@ class PlotIsochrone:
             workplace_node_color (str): color for showing destination aka workplace node
             cbar (ScalarMappable or None): if None, use cmap to automatically generate unique colours based on number of nodes. Else, use cbar to map values to colours
                 Define cbar: cbar = plot_utils.get_colorbar(vmin=0,vmax=3600,cmap="plasma",plot=False)
+            cbar_orientation (str): orientation of colorbar, either "horizontal" or "vertical"
             save_fp (str): file path to save figure to
         Returns:
             dict: sorted route times, where key are start_nodesID, and values are route times
@@ -160,13 +162,15 @@ class PlotIsochrone:
         for i in range(emptyAxis):
             axes[-1,-i-1].axis('off')
         # plot colorbar
+        # create cax to add colorbar to the figure
         fig.subplots_adjust(bottom=0.2)
-        cbar_ax = fig.add_axes([0.15, 0.15, 0.75, 0.01]) # left, bottom, width, height
-        fig.colorbar(cbar, cax=cbar_ax, orientation='horizontal', label=colorbar_label)
-        fig.suptitle(title)
-        # add legend
+        cbar_ax = fig.add_axes([0.15, 0.07, 0.75, 0.05]) # left, bottom, width, height
+        fig.colorbar(cbar, cax=cbar_ax, orientation=cbar_orientation, label=colorbar_label)
+        fig.suptitle(title, fontsize='large', fontweight='bold',y=1.0)
+        # add legend to the last subplot at the loc = lower right corner, box to anchor (x,y)
+        # ax.legend(loc='lower right',  bbox_to_anchor=(1.0, 0.0), fontsize='medium')
         handles, labels = ax.get_legend_handles_labels()
-        fig.legend(handles, labels, loc = (0.5, 0.1), ncol=1, fontsize='medium')
+        fig.legend(handles, labels, loc = (0.5, 0.22), ncol=1, fontsize='medium')
         if save_fp is not None:
             plt.savefig(save_fp, bbox_inches = 'tight')
         # plt.tight_layout()
