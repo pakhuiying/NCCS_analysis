@@ -95,19 +95,20 @@ class UpdateFloodNetwork:
 
         return G_copy
     
-    def get_flooded_car_df(self,workplace_cluster,flooded_edges,save_fp,cost="travel_time"):
+    def get_flooded_car_df(self,workplace_cluster,planningArea,flooded_edges,save_fp,cost="travel_time"):
         """ 
         Args:
             workplace_cluster (pd.DataFrame): dataframe that shows the coordinates of workplace nodes and nodesId
+            planningArea (gpd.GeoDataFrame): geopandas df of planning areas of SG
             flood_edges (list of edges): each item in this list is an edge e.g. (u,v, key)
             cost (str): name of the attribute in edges that define the cost for determining the shortest path
             save_fp (str): filepath.csv of where to save the itinerary entries 
         Returns:
             pd.DataFrame: outputs the updated itinerary based on global flooded road conditions
         """
-        # update travel speed and travel time in G
+        # update travel speed and travel time in G due to flooded roads, and rerun the shortest path algorithm for vehicle routing
         G_car_flooded = self.update_flooded_road_network(flooded_edges,plot=False)
-        CT = driving.CarTrip(G_car_flooded,workplace_cluster)
+        CT = driving.CarTrip(G_car_flooded,workplace_cluster,planningArea)
         itinerary_df = CT.get_itinerary_entry(cost=cost)
         # save as csv
         itinerary_df.to_csv(save_fp,index=False)
@@ -129,23 +130,27 @@ class UpdateFloodNetwork:
         # update travel speed and travel time in G
         G_bus_flooded = self.update_flooded_road_network(flooded_edges,plot=False)
 
-        # rerun bus route time with the updated travel time on flooded roads
-        itinerary_entries = []
-        for fp in publicTransit_fp_list:
-            TI = publicTransit.TripItinerary.from_file(G_bus_flooded, fp=fp)
-            try:
-                itinerary_entry = TI.get_itinerary_entry()
-                itinerary_entries.append(itinerary_entry)
-            except:
-                if not os.path.exists(error_fp):
-                    with open(error_fp, "w") as myfile:
-                        myfile.write(f'{fp}\n')
+        # rerun the public transit routing with the updated travel time on flooded roads
+        itinerary_df = pd.DataFrame.from_records(publicTransit.itinerary_entry_generator(G_bus_flooded,publicTransit_fp_list))
+        # remove rows with number_of_busroutes == 0
+        itinerary_df = itinerary_df[itinerary_df['number_of_busroutes'] > 0]
+        # # rerun bus route time with the updated travel time on flooded roads
+        # itinerary_entries = []
+        # for fp in publicTransit_fp_list:
+        #     TI = publicTransit.TripItinerary.from_file(G_bus_flooded, fp=fp)
+        #     try:
+        #         itinerary_entry = TI.get_itinerary_entry()
+        #         itinerary_entries.append(itinerary_entry)
+        #     except:
+        #         if not os.path.exists(error_fp):
+        #             with open(error_fp, "w") as myfile:
+        #                 myfile.write(f'{fp}\n')
 
-                else:
-                    with open(error_fp, "a") as myfile:
-                        myfile.write(f'{fp}\n')
+        #         else:
+        #             with open(error_fp, "a") as myfile:
+        #                 myfile.write(f'{fp}\n')
 
-        itinerary_df = pd.DataFrame.from_records(itinerary_entries)
+        # itinerary_df = pd.DataFrame.from_records(itinerary_entries)
         # append notes ID to the start and end coordinates
         itinerary_df['start_nodesID'] = ox.distance.nearest_nodes(G_bus_flooded,X = itinerary_df['start_lon'], Y = itinerary_df['start_lat'])
         itinerary_df['end_nodesID'] = ox.distance.nearest_nodes(G_bus_flooded,X = itinerary_df['end_lon'], Y = itinerary_df['end_lat'])
@@ -155,20 +160,22 @@ class UpdateFloodNetwork:
     
 
 class TravelTimeDelay:
-    def __init__(self, flooded_df,dry_df,planningArea,column_value,planningArea_column_value="REGION_N"):
+    def __init__(self, flooded_df,dry_df,planningArea,column_value,end_groupby="end_PLN_AREA_N",start_groupby="start_REGION_N"):
         """
         Args:
             flooded_df (pd.DataFrame): dataframe that shows the actual and simulated travel time and distance during dry weather
             dry_df (pd.DataFrame): dataframe that shows the actual and simulated travel time and distance during dry weather
             planningArea (gpd.GeoDataFrame): geopandas df of planning areas of SG
             column_value (str): column name which to compute the travel time delay
-            planningArea_column_value (str): column which describes the spatial region of Singapore
+            end_groupby (str): column which describes the spatial region of Singapore that itinerary ends at
+            start_groupby (str): column which describes the spatial region of Singapore that itinerary starts from
         """
         self.flooded_df = flooded_df
         self.dry_df = dry_df
         self.planningArea = planningArea
         self.column_value = column_value
-        self.planningArea_column_value = planningArea_column_value
+        self.start_groupby = start_groupby
+        self.end_groupby = end_groupby
         if len(self.flooded_df.index) != len(self.dry_df.index):
             warnings.warn(f"flooded_df {(len(self.flooded_df.index))} do not have the same length as dry_df ({len(self.dry_df.index)})!")
 
@@ -209,15 +216,16 @@ class TravelTimeDelay:
         
         travel_time_delay_df = travel_time_delay_df.reset_index()
         # split df based on end_nodesID
-        return {k:df for k,df in travel_time_delay_df.groupby('end_nodesID')}
+        # return {k:df for k,df in travel_time_delay_df.groupby('end_nodesID')}
+        return {k:df for k,df in travel_time_delay_df.groupby(self.end_groupby)}
     
     def get_planningArea_itinerary(self, itinerary_df,colors=None,plot=True):
         """
-        spatial joint of planning area and itinerary
+        spatial joint of planning area and itinerary, which assigns the start_nodesID to their associated planningArea polygons
         Args:
             itinerary_df (pd.DataFrame): an updated itinerary based on flooded road conditions and travel time delay
             colors (dict): color rgb hex code mapping to the 5 administrative districts
-            planningArea_column_value (str): column which describes the spatial region of Singapore
+            start_groupby (str): column which describes the spatial region of Singapore
         Returns:
             gpd: spatial joint of planning area and itinerary
         """
@@ -236,8 +244,8 @@ class TravelTimeDelay:
             if colors is None:
                 colors = {'EAST REGION':"#dffeb2","WEST REGION": "#ffe7c8","CENTRAL REGION":"#bedcfd",
                     'NORTH REGION':"#e9b3fd",'NORTH-EAST REGION':"#fdb3ba"}
-            colormap = pd.DataFrame({'colors':list(colors.values()),self.planningArea_column_value:list(colors)})
-            planningArea_nodes = planningArea_nodes.merge(colormap,on=self.planningArea_column_value)
+            colormap = pd.DataFrame({'colors':list(colors.values()),self.start_groupby:list(colors)})
+            planningArea_nodes = planningArea_nodes.merge(colormap,on=self.start_groupby)
             # plot planning area boundary
             ax = planningArea_nodes.plot(fc="none",ec="k")
             # planningArea_nodes = planningArea_nodes[['colors','start_lat','start_lon']]
@@ -249,156 +257,314 @@ class TravelTimeDelay:
         
         return planningArea_nodes
     
-    def get_total_travel_time_delay(self):
+    def get_stats_travel_time_delay(self,itinerary_df=None,save_fp=None):
         """ 
-        get total travel time delay by planning area
         Args:
-            column_value (str): column name which to compute the travel time delay
+            itinerary_df (pd.DataFrame): output from compute_travel_time_delay()
+            save_fp (str): file path to save csv to
         Returns:
-            dict: a nested dict where 1st level of keys are end_nodesID, 2nd level of keys are REGION_N (district names), and values are travel time delay
+            dict: keys are a tuple of (end_groupby, start_groupby), corresponding to planning area and region 
+                values are descriptive statistics of travel time delay
+            pd.DataFrame: if save_fp is not None, export it as csv.
         """
-        # remove islands
-        # planningArea = self.planningArea[~self.planningArea['PLN_AREA_N'].str.contains("ISLAND")]
-        itinerary_df_list = self.get_grouped_travel_time_delay()
-        # iterate through different itineraries
-        travelTimeDelay_districts_dict = dict()#{p:[] for p in planningArea['REGION_N'].to_list()}
-        for end_nodesID, itinerary_df in itinerary_df_list.items():
-            # get total travel time delay by district areas in Singapore (dict)
-            travelTimeDelay_districts = self.get_planningArea_itinerary(itinerary_df,plot=False)
-            # group by REGION_N and sum up total travel time delay by REGION_N
-            travelTimeDelay_districts = travelTimeDelay_districts.groupby([self.planningArea_column_value])['travel_time_delay'].sum().to_dict()
-            travelTimeDelay_districts_dict[end_nodesID] = travelTimeDelay_districts
+        if itinerary_df is None:
+            # compute travel time delay
+            itinerary_df = self.compute_travel_time_delay()
         
-        return travelTimeDelay_districts_dict
-
-    def plot_total_travel_time_delay(self,xlabels=None,colors=None,width=0.5,title="",save_fp=None):
+        # aggregate travel time delay by plannning area and region and calculate count, sum, mean as separate columns
+        def summarise_func(row):
+            """ custom function to summarise travel time delay per df row"""
+            # initialise dictionary
+            d = row['travel_time_delay'].describe().to_dict()
+            d['sum'] = row['travel_time_delay'].sum()
+            # get routes where travel time delay is greater than 0
+            rows_delay = row['travel_time_delay'][row['travel_time_delay'] > 0]
+            # number of paths with travel time delay
+            rows_delay_describe = rows_delay.describe().to_dict()
+            for k,v in rows_delay_describe.items():
+                d[k+"_delay"] = v
+            # compute IQR for those routes with travel time delay
+            IQR = d['75%_delay'] - d['25%_delay']
+            d['whislow_delay'] = d['25%_delay'] - 1.5*IQR
+            d['whishigh_delay'] = d['75%_delay'] + 1.5*IQR
+            return pd.Series(d,index=list(d))
+        
+        # group by end_groupby and start_groupby
+        travelTimeDelay_districts_df = itinerary_df.groupby([self.end_groupby,self.start_groupby]).apply(lambda x: summarise_func(x))
+        # TODO: # get count of delayed buses to identify how many routes and bus services are affected as additional column
+        travelTimeDelay_districts_df = travelTimeDelay_districts_df.reset_index()
+        # save as csv is fp is not None
+        if save_fp is not None:
+            travelTimeDelay_districts_df.to_csv(save_fp,index=False)
+        # convert to dict
+        return travelTimeDelay_districts_df
+    
+    def plot_total_travel_time_delay(self,xlabels=None,colors=None,width=0.6,title="",ax=None,save_fp=None):
         """ plot a horizontal bar chart of total travel time delay per planning area
         Args:
             xlabels (list of str): list of x axis labels
             colors (dict): keys are REGION_N and values are rgb hex codes for each REGION_N
             width (float): width of each bar
             title (str): title for plot
+            ax (mpl.Axes): if None, plot on a new figure, else, plot on supplied ax
             save_fp (str): file path to save figure to
         """
+        # get stats of travel time delay
+        travelTimeDelay_districts_df = self.get_stats_travel_time_delay()
+        # convert df to dict
+        travelTimeDelay_districts_dict = travelTimeDelay_districts_df.set_index([self.end_groupby,self.start_groupby]).to_dict(orient='index')
         # reorganise dict for plotting
-        travelTimeDelay_districts_dict = self.get_total_travel_time_delay()
-        # x labels are end_nodesID
-        if xlabels is None:
-            xlabels = [str(i) for i in list(travelTimeDelay_districts_dict)] # list of end_nodesID
-        if colors is None:
-            colors = {'EAST REGION':"#dffeb2","WEST REGION": "#ffe7c8","CENTRAL REGION":"#bedcfd",
-                    'NORTH REGION':"#e9b3fd",'NORTH-EAST REGION':"#fdb3ba"}
-        # districts are stacking variable in stacked bar
-        plotting_dict = {district: [] for district in list(colors)}
-        for nodesID, travel_time_delay_dict in travelTimeDelay_districts_dict.items():
-            for district, timeDelay in travel_time_delay_dict.items():
-                plotting_dict[district].append(timeDelay)
-        # plot
-        fig, ax = plt.subplots()
+        # first level of keys are region names, second level of keys are planning area names
+        plotting_dict = dict()
+        for (pln,region) in travelTimeDelay_districts_dict.keys():
+            plotting_dict[region] = dict()
+        for (pln,region),stats in travelTimeDelay_districts_dict.items():
+            plotting_dict[region][pln] = stats['sum']
+        xlabels = list(plotting_dict[list(plotting_dict)[0]]) # planning area names
         # start baseline at 0
         bottom = np.zeros(len(xlabels))
+
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(6, 9))
+
+        # assign colors to each region
+        colors = {'EAST REGION':"#dffeb2","WEST REGION": "#ffe7c8","CENTRAL REGION":"#bedcfd",
+                    'NORTH REGION':"#e9b3fd",'NORTH-EAST REGION':"#fdb3ba"}
+        # iterate through region, and cummulatively "stacking" planning area values region by region
+        for region,pln_dict in plotting_dict.items():
+            pln_time_delay = list(pln_dict.values())
+            p = ax.barh(xlabels,pln_time_delay,height=width,
+                label=region,left=bottom,color=colors[region])
+            bottom += pln_time_delay
         
-        # iterate through district, and cummulatively add district values "stacking"
-        for district, travel_time_delay_arr in plotting_dict.items():
-            p = ax.barh(xlabels,travel_time_delay_arr,height=width,
-                    label=district,left=bottom,color=colors[district])
-            bottom += travel_time_delay_arr
-        
-        ax.set_title("Total travel time delay from administrative districts to workclusters ID")
-        # rotate time 45 deg
-        # ax.set_xticklabels(ax.get_xticklabels(),rotation=45,ha='right')
-        # set y axis title
-        ax.set_ylabel("Workclusters ID")
+        ax.set_ylabel("Work clusters")
         ax.set_xlabel("Total travel time delay (s)")
         ax.set_title(title)
         ax.invert_yaxis() # labels read top-to-bottom
-        ax.legend(loc='lower center',bbox_to_anchor=(0.5,-0.3),ncols=3)
+        ax.legend(loc='lower center',bbox_to_anchor=(0.4,-0.15),ncols=3)
+        if save_fp is not None:
+            plt.savefig(save_fp, bbox_inches = 'tight')
+        if ax is None:
+            plt.show()
+        return plotting_dict
+
+    def plot_travel_time_delay_stats(self, selected_planningArea=['TAMPINES','JURONG EAST','WOODLANDS','DOWNTOWN CORE','SELETAR'],
+                                     save_fp=None):
+        """ 
+        plot modified boxplot for selected planning areas for routes that experienced travel time delay
+        Args:
+            selected_planningArea (list): list of planning areas to be plotted
+            save_fp (str): file path to save figure to
+        """
+         # get stats of travel time delay
+        travelTimeDelay_districts_df = self.get_stats_travel_time_delay()
+        # assign colors to each region
+        colors = {'EAST REGION':"#dffeb2","WEST REGION": "#ffe7c8","CENTRAL REGION":"#bedcfd",
+                    'NORTH REGION':"#e9b3fd",'NORTH-EAST REGION':"#fdb3ba"}
+        # filter dataframe for selected planning areas
+        travelTimeDelay_districts_dict = travelTimeDelay_districts_df[travelTimeDelay_districts_df[self.end_groupby].isin(selected_planningArea)]
+        # reorganise dict for plotting
+
+        regions =  travelTimeDelay_districts_dict[self.start_groupby].unique()
+        # create a dictionary to store the plotting data
+        plotting_dict = {region: [] for region in regions}
+        travelTimeDelay_districts_dict = travelTimeDelay_districts_dict.set_index([self.end_groupby,self.start_groupby]).to_dict(orient='index')
+
+        for (pln,region),stats in travelTimeDelay_districts_dict.items():
+            med = stats['50%_delay']
+            q1 = stats['25%_delay']
+            q3 = stats['75%_delay']
+            # modify whisker to be min and max instead of 1.5*IQR
+            whislo = stats['min_delay']
+            whishi = stats['max_delay']
+            mean = stats['mean_delay']
+            d = {'med': med, 'q1': q1, 'q3': q3, 'whislo': whislo, 'whishi': whishi, 'mean': mean,
+                'label': pln, 'color': colors[region]}
+            plotting_dict[region].append(d)
+
+        # modify axis title
+        ax_text_style = dict(horizontalalignment='center', verticalalignment='center',
+                        fontsize=14,weight='bold')
+        # # number of columns corresponds to number of regions
+        ncols = len(regions)
+        fig, axes = plt.subplots(1,ncols,figsize=(ncols*4,4),sharey=True,sharex=True)
+        for (region,bxpstats_list),ax in zip(plotting_dict.items(),axes.flatten()):
+            ax.bxp(bxpstats_list,orientation='horizontal',patch_artist=True,
+                boxprops=dict(facecolor=colors[region], edgecolor='k'),
+                medianprops=dict(color='k'),
+                meanprops=dict(marker='*', markerfacecolor='yellow', markeredgecolor='black',markersize=10),
+                whiskerprops=dict(color='k'),
+                showmeans=True,
+                showfliers=False,
+                showcaps=False,
+                showbox=True)
+            ax.invert_yaxis() # labels read top-to-bottom
+            ax.set_title(region,**ax_text_style)
+            ax.set_xlabel("Travel time delay (s) for affected routes")
+        plt.tight_layout()
         if save_fp is not None:
             plt.savefig(save_fp, bbox_inches = 'tight')
         plt.show()
-        return 
+        return plotting_dict
     
-    def get_stats_travel_time_delay(self,itinerary_df=None,save_fp=None):
-        """ 
-        Args:
-            itinerary_df (pd.DataFrame): spatial joint of planning area and itinerary_df (output from get_planningArea_itinerary)
-            save_fp (str): file path to save csv to
-        Returns:
-            dict: 1st level keys are end_nodesID, 2nd level keys are planningArea_column_value, 
-                3rd level keys are summary_travel_time_delay (summary of travel time delay) and summary_buses_delayed (keys are bus services and values are count of that affected bus service)
-            pd.DataFrame: if save_fp is not None, export it as csv.
-        """
-        if itinerary_df is None:
-            # compute travel time delay
-            travel_time_delay_df = self.compute_travel_time_delay()
-            # spatial joint of start_nodesID to their associated planningArea polygons
-            itinerary_df = self.get_planningArea_itinerary(travel_time_delay_df,colors=None,plot=False)
+    # def get_total_travel_time_delay(self):
+    #     """ 
+    #     get total travel time delay by planning area
+    #     Args:
+    #         column_value (str): column name which to compute the travel time delay
+    #     Returns:
+    #         dict: a nested dict where 1st level of keys are end_nodesID, 2nd level of keys are REGION_N (district names), and values are travel time delay
+    #     """
+    #     # remove islands
+    #     # planningArea = self.planningArea[~self.planningArea['PLN_AREA_N'].str.contains("ISLAND")]
+    #     itinerary_df_list = self.get_grouped_travel_time_delay()
+    #     # iterate through different itineraries
+    #     travelTimeDelay_districts_dict = dict()#{p:[] for p in planningArea['REGION_N'].to_list()}
+    #     # iterate through each end_nodesID which each has a unique planning area
+    #     for end_nodesID, itinerary_df in itinerary_df_list.items():
+    #         # get total travel time delay by district areas in Singapore (dict)
+    #         # travelTimeDelay_districts = self.get_planningArea_itinerary(itinerary_df,plot=False)
+    #         # group by REGION_N and sum up total travel time delay by REGION_N
+    #         # travelTimeDelay_districts = travelTimeDelay_districts.groupby([self.start_groupby])['travel_time_delay'].sum().to_dict()
+    #         travelTimeDelay_districts = itinerary_df.groupby([self.start_groupby])['travel_time_delay'].sum().to_dict()
+    #         travelTimeDelay_districts_dict[end_nodesID] = travelTimeDelay_districts
         
-        itinerary_df = itinerary_df.reset_index()
-        grouped_stats = {end_nodesID: {region: region_df for region, region_df in end_nodesID_df.groupby(self.planningArea_column_value)} 
-        for end_nodesID, end_nodesID_df in itinerary_df.groupby('end_nodesID')}
-        
-        summary_stats = dict()
-        for end_nodesID, end_nodesID_df in grouped_stats.items():
-            region_stats = dict()
-            for region, region_df in end_nodesID_df.items():
-                N_routes = len(region_df.index) # number of different routes
-                # column names to filter
-                columns_filter = ['start_nodesID','end_nodesID','travel_time_delay',self.planningArea_column_value]
-                if 'routeId' in region_df.columns:
-                    columns_filter.append('routeId')
-                df = region_df[columns_filter]
-                # only filter bus routes where travel time delay is experienced. there could be some routes where there are no time delay
-                df = df[df['travel_time_delay']>0]
-                travel_time_delay_stats = df['travel_time_delay'].describe().to_dict()
-                region_stats[region] = {'N_routes':N_routes,
-                                        'summary_travel_time_delay': travel_time_delay_stats,
-                                        }
-                # (only applicable for bus routes)
-                if 'routeId' in df.columns:
-                    # remove NA 
-                    buses = [j for i in df['routeId'] for j in str(i).split(',') if j != "nan"]
-                    # get count of delayed buses to identify how many routes and bus services are affected
-                    buses_delayed, buses_count = np.unique(buses,return_counts=True)
-                    summary_buses_delayed = {str(k):v for k,v in zip(buses_delayed,buses_count)}
-                    region_stats[region]['summary_buses_delayed'] = summary_buses_delayed
-                # region_stats[region] = {'summary_travel_time_delay': travel_time_delay_stats,
-                #                         'summary_buses_delayed': summary_buses_delayed,
-                #                         'N_routes':N_routes}
-            summary_stats[end_nodesID] = region_stats
+    #     return travelTimeDelay_districts_dict
 
-        # export as csv
-        if save_fp is not None:
-            # summarise it in a table
-            summary_travel_time_delay = self.get_table_travel_time_delay(summary_stats)
-            summary_travel_time_delay.to_csv(save_fp,index=False)
+    # def plot_total_travel_time_delay(self,xlabels=None,colors=None,width=0.5,title="",ax=None,save_fp=None):
+    #     """ plot a horizontal bar chart of total travel time delay per planning area
+    #     Args:
+    #         xlabels (list of str): list of x axis labels
+    #         colors (dict): keys are REGION_N and values are rgb hex codes for each REGION_N
+    #         width (float): width of each bar
+    #         title (str): title for plot
+    #         ax (mpl.Axes): if None, plot on a new figure, else, plot on supplied ax
+    #         save_fp (str): file path to save figure to
+    #     """
+    #     # reorganise dict for plotting
+    #     travelTimeDelay_districts_dict = self.get_total_travel_time_delay()
+    #     # x labels are end_nodesID
+    #     if xlabels is None:
+    #         xlabels = [str(i) for i in list(travelTimeDelay_districts_dict)] # list of end_nodesID
+    #     if colors is None:
+    #         colors = {'EAST REGION':"#dffeb2","WEST REGION": "#ffe7c8","CENTRAL REGION":"#bedcfd",
+    #                 'NORTH REGION':"#e9b3fd",'NORTH-EAST REGION':"#fdb3ba"}
+    #     # districts are stacking variable in stacked bar
+    #     plotting_dict = {district: [] for district in list(colors)}
 
-        return summary_stats
+    #     # iterate through each end_nodesID which each has a unique planning area
+    #     for nodesID, travel_time_delay_dict in travelTimeDelay_districts_dict.items():
+    #         # iterate through each start REGION_N and append the travel time delay to the plotting dict
+    #         for district, timeDelay in travel_time_delay_dict.items():
+    #             plotting_dict[district].append(timeDelay)
+    #     # plot
+    #     if ax is None:
+    #         fig, ax = plt.subplots(figsize=(6, 9))
+    #     # start baseline at 0
+    #     bottom = np.zeros(len(xlabels))
+        
+    #     # iterate through district, and cummulatively add district values "stacking"
+    #     for district, travel_time_delay_arr in plotting_dict.items():
+    #         p = ax.barh(xlabels,travel_time_delay_arr,height=width,
+    #                 label=district,left=bottom,color=colors[district])
+    #         bottom += travel_time_delay_arr
+        
+    #     ax.set_title("Total travel time delay from administrative districts to work clusters")
+    #     # rotate time 45 deg
+    #     # ax.set_xticklabels(ax.get_xticklabels(),rotation=45,ha='right')
+    #     # set y axis title
+    #     ax.set_ylabel("Work clusters")
+    #     ax.set_xlabel("Total travel time delay (s)")
+    #     ax.set_title(title)
+    #     ax.invert_yaxis() # labels read top-to-bottom
+    #     ax.legend(loc='lower center',bbox_to_anchor=(0.4,-0.2),ncols=3)
+    #     if save_fp is not None:
+    #         plt.savefig(save_fp, bbox_inches = 'tight')
+    #     if ax is None:
+    #         plt.show()
+    #     return 
+    
+    # def get_stats_travel_time_delay(self,itinerary_df=None,save_fp=None):
+    #     """ 
+    #     Args:
+    #         itinerary_df (pd.DataFrame): spatial joint of planning area and itinerary_df (output from get_planningArea_itinerary)
+    #         save_fp (str): file path to save csv to
+    #     Returns:
+    #         dict: 1st level keys are end_nodesID, 2nd level keys are start_groupby, 
+    #             3rd level keys are summary_travel_time_delay (summary of travel time delay) and summary_buses_delayed (keys are bus services and values are count of that affected bus service)
+    #         pd.DataFrame: if save_fp is not None, export it as csv.
+    #     """
+    #     if itinerary_df is None:
+    #         # compute travel time delay
+    #         travel_time_delay_df = self.compute_travel_time_delay()
+    #         # spatial joint of start_nodesID to their associated planningArea polygons
+    #         itinerary_df = self.get_planningArea_itinerary(travel_time_delay_df,colors=None,plot=False)
+        
+    #     itinerary_df = itinerary_df.reset_index()
+    #     grouped_stats = {end_nodesID: {region: region_df for region, region_df in end_nodesID_df.groupby(self.start_groupby)} 
+    #     for end_nodesID, end_nodesID_df in itinerary_df.groupby('end_nodesID')}
+        
+    #     summary_stats = dict()
+    #     for end_nodesID, end_nodesID_df in grouped_stats.items():
+    #         region_stats = dict()
+    #         for region, region_df in end_nodesID_df.items():
+    #             N_routes = len(region_df.index) # number of different routes
+    #             # column names to filter
+    #             columns_filter = ['start_nodesID','end_nodesID','travel_time_delay',self.start_groupby]
+    #             if 'routeId' in region_df.columns:
+    #                 columns_filter.append('routeId')
+    #             df = region_df[columns_filter]
+    #             # only filter bus routes where travel time delay is experienced. there could be some routes where there are no time delay
+    #             df = df[df['travel_time_delay']>0]
+    #             travel_time_delay_stats = df['travel_time_delay'].describe().to_dict()
+    #             region_stats[region] = {'N_routes':N_routes,
+    #                                     'summary_travel_time_delay': travel_time_delay_stats,
+    #                                     }
+    #             # (only applicable for bus routes)
+    #             if 'routeId' in df.columns:
+    #                 # remove NA 
+    #                 buses = [j for i in df['routeId'] for j in str(i).split(',') if j != "nan"]
+    #                 # get count of delayed buses to identify how many routes and bus services are affected
+    #                 buses_delayed, buses_count = np.unique(buses,return_counts=True)
+    #                 summary_buses_delayed = {str(k):v for k,v in zip(buses_delayed,buses_count)}
+    #                 region_stats[region]['summary_buses_delayed'] = summary_buses_delayed
+    #             # region_stats[region] = {'summary_travel_time_delay': travel_time_delay_stats,
+    #             #                         'summary_buses_delayed': summary_buses_delayed,
+    #             #                         'N_routes':N_routes}
+    #         summary_stats[end_nodesID] = region_stats
 
-    def get_table_travel_time_delay(self,stats_travel_time_delay=None):
-        """ 
-        Args:
-            stats_travel_time_delay (dict): output of get_stats_travel_time_delay
-        Returns:
-            pd.DataFrame: a long dataframe with stats, values, region and end_nodesID
-        """
-        if stats_travel_time_delay is None:
-            stats_travel_time_delay = self.get_stats_travel_time_delay()
-        df_end_nodesID = []
-        for end_nodesID, end_nodesID_df in stats_travel_time_delay.items():
-            df_region = []
-            for region, region_df in end_nodesID_df.items():
-                df = pd.DataFrame.from_dict({'stats':list(region_df['summary_travel_time_delay']),
-                                            'values':list(region_df['summary_travel_time_delay'].values())})
-                df[self.planningArea_column_value] = region
-                df['end_nodesID'] = end_nodesID
-                df_region.append(df)
-            df_region = pd.concat(df_region)
-            df_end_nodesID.append(df_region)
+    #     # export as csv
+    #     if save_fp is not None:
+    #         # summarise it in a table
+    #         summary_travel_time_delay = self.get_table_travel_time_delay(summary_stats)
+    #         summary_travel_time_delay.to_csv(save_fp,index=False)
+
+    #     return summary_stats
+
+    # def get_table_travel_time_delay(self,stats_travel_time_delay=None):
+    #     """ 
+    #     Args:
+    #         stats_travel_time_delay (dict): output of get_stats_travel_time_delay
+    #     Returns:
+    #         pd.DataFrame: a long dataframe with stats, values, region and end_nodesID
+    #     """
+    #     if stats_travel_time_delay is None:
+    #         stats_travel_time_delay = self.get_stats_travel_time_delay()
+    #     df_end_nodesID = []
+    #     for end_nodesID, end_nodesID_df in stats_travel_time_delay.items():
+    #         df_region = []
+    #         for region, region_df in end_nodesID_df.items():
+    #             df = pd.DataFrame.from_dict({'stats':list(region_df['summary_travel_time_delay']),
+    #                                         'values':list(region_df['summary_travel_time_delay'].values())})
+    #             df[self.start_groupby] = region
+    #             df['end_nodesID'] = end_nodesID
+    #             df_region.append(df)
+    #         df_region = pd.concat(df_region)
+    #         df_end_nodesID.append(df_region)
         
-        summary_travel_time_delay = pd.concat(df_end_nodesID)
+    #     summary_travel_time_delay = pd.concat(df_end_nodesID)
         
-        return summary_travel_time_delay
+    #     return summary_travel_time_delay
     
     def get_all_bus_services(self, travel_time_delay_df=None):
         """ 

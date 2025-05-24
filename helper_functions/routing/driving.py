@@ -13,14 +13,42 @@ import pandas as pd
 import numpy as np
 
 class CarTrip:
-    def __init__(self, G,workplace_cluster):
+    def __init__(self, G,workplace_cluster,planningArea):
         """ 
         Args:
             G (G): driving network
             workplace_cluster (pd.DataFrame): dataframe that shows the coordinates of workplace nodes and nodesId
+            planningArea (geopandas.GeoDataFrame): dataframe that shows the planning area that has columns: PLN_AREA_N and REGION_N
         """
         self.G = G
         self.workplace_cluster = workplace_cluster
+        self.planningArea = planningArea
+
+    def spatial_join_with_planning_area(self,df,prefix):
+        """ 
+        Args:
+            df (pd.DataFrame): dataframe that shows the coordinates and node IDs of start nodes and end nodes
+            prefix (str): prefix to locate and rename columns in the dataframe
+        Returns:
+            pd.DataFrame: dataframe that shows the coordinates of workplace nodes and nodesId with planning area information
+        """
+        nodes_gdf = df[[f'{prefix}_nodesID',f'{prefix}_lat',f'{prefix}_lon']].drop_duplicates()
+        # print("Length of df: ",len(nodes_gdf.index))
+        nodes_gdf = gpd.GeoDataFrame(
+                    nodes_gdf, geometry=gpd.points_from_xy(nodes_gdf[f'{prefix}_lon'], nodes_gdf[f'{prefix}_lat']), crs="EPSG:4326"
+                )
+        # select only relevant columns
+        nodes_gdf = nodes_gdf.sjoin(self.planningArea[['PLN_AREA_N','PLN_AREA_C','REGION_N','REGION_C','geometry']], how="left")
+        # print("Length of df: ",len(nodes_gdf.index))
+        # rename columns with a prefix of "start_", if columns already have a "start_" prefix, skip renaming
+        nodes_gdf = nodes_gdf.rename(columns=lambda x: f"{prefix}_{x}" if not x.startswith(f"{prefix}_") else x)
+
+        # keep column names that contains "PLN_AREA_N" or "REGION_N"
+        nodes_gdf = nodes_gdf.loc[:,nodes_gdf.columns.str.contains("nodesID|PLN_AREA|REGION")]
+
+        # merge nodes_gdf with df based on the nodesID
+        df = df.merge(nodes_gdf, how="left", left_on=f"{prefix}_nodesID", right_on=f"{prefix}_nodesID")
+        return df
     
     def get_itinerary_entry(self,cost="travel_time"):
         """ 
@@ -30,30 +58,39 @@ class CarTrip:
             pd.DataFrame: total travel time (in seconds) from orig to dest along the shortest path 
         """
         # convert nodes into coordinates
+        # nodes_gdf represents the coordinates of the start nodes
         nodes_gdf = ox.graph_to_gdfs(self.G,nodes=True, edges=False)
         nodes_gdf = nodes_gdf[['y','x']].reset_index()
         nodes_gdf = nodes_gdf.rename(columns={"osmid":"start_nodesID","y":"start_lat","x":"start_lon"})
         df_list = []
+        # simulate vehicle trips from each workplace cluster to all other nodes in the network
+        # this is also equivalent to finding the trips from all other nodes to the workplace cluster
+        # workplace cluster is the destination (i.e. end node)
         for row_ix,row in self.workplace_cluster.iterrows():
             node_id = row['node_ID']
             end_lat = row['latitude']
             end_lon = row['longitude']
-            PLN_AREA_N = row['PLN_AREA_N']
-            REGION_N = row['REGION_N']
+            # PLN_AREA_N = row['PLN_AREA_N']
+            # REGION_N = row['REGION_N']
             # returns a dict keyed by target, values are shortest path length from the source to the target
             route_times = nx.shortest_path_length(self.G,source=node_id, target=None, weight=cost)
             df = pd.DataFrame({'start_nodesID': list(route_times),'simulated_total_duration': list(route_times.values())})
             df['end_nodesID'] = node_id
             df['end_lat'] = end_lat
             df['end_lon'] = end_lon
-            df['PLN_AREA_N'] = PLN_AREA_N
-            df['REGION_N'] = REGION_N
+            # df['end_PLN_AREA_N'] = PLN_AREA_N
+            # df['end_REGION_N'] = REGION_N
             df_list.append(df)
         itinerary_df = pd.concat(df_list)
         # merge nodes_gdf and itinerary_df
         itinerary_df = itinerary_df.merge(nodes_gdf,how="left",on="start_nodesID")
         # cast as int64
         itinerary_df[['start_nodesID','end_nodesID']] = itinerary_df[['start_nodesID','end_nodesID']].astype(int)
+
+        # spatial join between start_nodesID with planning area
+        itinerary_df = self.spatial_join_with_planning_area(itinerary_df,prefix="start")
+        # spatial join between end_nodesID with planning area
+        itinerary_df = self.spatial_join_with_planning_area(itinerary_df,prefix="end")
         return itinerary_df
     
 def get_shortest_path_driving(G, orig, dest=None,

@@ -139,7 +139,7 @@ class PlotIsochrone:
             lat = itinerary_df["end_lat"].values[0]
             lon = itinerary_df["end_lon"].values[0]
             # PLN_AREA_N = itinerary_df["PLN_AREA_N"].values[0]
-            REGION_N = itinerary_df["REGION_N"].values[0]
+            REGION_N = itinerary_df["end_REGION_N"].values[0]
             # remove itineraries where there are no bus routes 
             try:
                 # (only applicable for bus)

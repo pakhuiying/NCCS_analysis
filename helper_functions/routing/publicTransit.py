@@ -772,10 +772,8 @@ class TripItinerary:
         ax.set_xlim(min_lon-xlim_factor*delta_lon,max_lon+xlim_factor*delta_lon)
         return
 
-    def get_itinerary_entry(self, return_generator = False):
+    def get_itinerary_entry(self):
         """ 
-        Args:
-            return_generator (bool): If True, yield dict
         Returns:
             dict: for an entry of a pandas row, to be consolidated into a df when calling pd.DataFrame.from_records
         """
@@ -810,4 +808,18 @@ class TripItinerary:
             
             return return_dict
         
-    
+def itinerary_entry_generator(G_bus,fp_list):
+    """
+    creates a generator object that yields itinerary entries
+    Args:
+        G_bus (MultiDiGraph): graph of drive bus network
+        fp_list (list): list of filepaths to itinerary json files
+    """
+    for fp in fp_list:
+        TI = TripItinerary.from_file(G_bus, fp=fp)
+        if TI.error_flag is False: # yields None if error_flag is True
+            try:
+                yield TI.get_itinerary_entry()
+            except Exception as e:
+                # print(f"{fp}: {e}")
+                pass    
