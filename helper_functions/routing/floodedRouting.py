@@ -14,15 +14,22 @@ import helper_functions.routing.driving as driving
 import helper_functions.plot_utils as plot_utils
 
 class UpdateFloodNetwork:
-    def __init__(self, G, flooded_maxspeed=20):
-        """ Assumes that all flooded roads have a flat reduced speed of flooded_maxspeed
+    def __init__(self, G, flooded_maxspeed=None, percentage_reduction_maxspeed=10):
+        """
+        Either use flooded_maxspeed or percentage_reduction_maxspeed to update flood network, one of the params must be None
         TODO: change flooded_maxspeed as a function of flood depth
         Args:
             G (G): driving route
             flooded_maxspeed (float): max speed on the road when it is flooded. Default is 20 km/h. This will override the maxspeed attribute in G.
+            percentage_reduction_maxspeed (float, 0 to 100): percentage reduction from max speed allowed on roads
         """
         self.G = G
         self.flooded_maxspeed=flooded_maxspeed
+        self.percentage_reduction_maxspeed = percentage_reduction_maxspeed
+        # check if either one of the params is None, this is to make sure one param doesnt override the other param
+        assert not(all([flooded_maxspeed != None, percentage_reduction_maxspeed != None])), "either flooded_maxspeed or percentage_reduction_maxspeed must be None"
+        # to make sure both params are not None
+        assert not(all([flooded_maxspeed == None, percentage_reduction_maxspeed == None])), "both flooded_maxspeed and percentage_reduction_maxspeed must not be None"
 
     def identify_flooded_roads(self, historical_floods,rf_value,rf_type='highest 30 min rainfall (mm)', plot = True, ax = None,
                                flooded_edge_color="red",edge_color="white", flooded_edge_linewidth=2):
@@ -56,7 +63,7 @@ class UpdateFloodNetwork:
         return flooded_edges
 
     def update_flooded_road_network(self, flooded_edges, plot=True,cmap="plasma",**kwargs):
-        """ 
+        """
         Args:
             flooded_edges (list of edges): each item in this list is an edge e.g. (u,v, key)
             plot (bool): If plot is True, visualise the maxspeed on the road
@@ -68,10 +75,21 @@ class UpdateFloodNetwork:
         G_copy = copy.deepcopy(self.G) # deep copy so it does not change the original
         # convert edges in the graph
         edges = ox.graph_to_gdfs(G_copy, nodes=False)
-        # filter edges df by those identified as flooded in flooded_edges, and update the flooded speed
-        edges.loc[flooded_edges,'maxspeed'] = self.flooded_maxspeed
+        if self.flooded_maxspeed is not None:
+            # filter edges df by those identified as flooded in flooded_edges, and update the flooded speed
+            # replace flooded speed with a flat value
+            edges.loc[flooded_edges,'maxspeed'] = self.flooded_maxspeed
+        if self.percentage_reduction_maxspeed is not None:
+            # filter edges df by those identified as flooded in flooded_edges, and update the flooded speed
+            # reduce speed by percentage reduction from the max speed
+            speed_reduc_factor = 1 - self.percentage_reduction_maxspeed/100
+            edges.loc[flooded_edges,'maxspeed'] = pd.to_numeric(edges.loc[flooded_edges,'maxspeed'],errors='coerce')*speed_reduc_factor
+
         # case maxspeed column to float64
         edges['maxspeed'] = pd.to_numeric(edges.maxspeed, errors='coerce')
+        # check if edges maxspeed has any NAs
+        if edges['maxspeed'].isna().any() is np.True_:
+            warnings.warn("Edges' maxspeed has NAs")
         # update maxspeed in G_copy
         for (_, _, _, data),maxspeed in zip(G_copy.edges(data=True, keys=True),edges['maxspeed']):
             data['maxspeed'] = maxspeed
@@ -114,11 +132,12 @@ class UpdateFloodNetwork:
         itinerary_df.to_csv(save_fp,index=False)
         return itinerary_df
     
-    def get_flooded_publicTransit_df(self,publicTransit_fp_list,flooded_edges,
-                                     save_fp,error_fp):
+    def get_flooded_publicTransit_df(self,publicTransit_fp_list,planningArea,flooded_edges,
+                                     save_fp):
         """ 
         Args:
             publicTransit_fp_list (list of str): list of filepath that has the itinerary information in json
+            planningArea (gpd.GeoDataFrame): geopandas df of planning areas of SG
             flood_edges (list of edges): each item in this list is an edge e.g. (u,v, key)
             save_fp (str): filepath.csv of where to save the itinerary entries 
             error_fp (str): filepath.txt of where to save the error files
@@ -131,9 +150,9 @@ class UpdateFloodNetwork:
         G_bus_flooded = self.update_flooded_road_network(flooded_edges,plot=False)
 
         # rerun the public transit routing with the updated travel time on flooded roads
-        itinerary_df = pd.DataFrame.from_records(publicTransit.itinerary_entry_generator(G_bus_flooded,publicTransit_fp_list))
-        # remove rows with number_of_busroutes == 0
-        itinerary_df = itinerary_df[itinerary_df['number_of_busroutes'] > 0]
+        # itinerary_df = pd.DataFrame.from_records(publicTransit.itinerary_entry_generator(G_bus_flooded,publicTransit_fp_list))
+        # # remove rows with number_of_busroutes == 0
+        # itinerary_df = itinerary_df[itinerary_df['number_of_busroutes'] > 0]
         # # rerun bus route time with the updated travel time on flooded roads
         # itinerary_entries = []
         # for fp in publicTransit_fp_list:
@@ -152,10 +171,12 @@ class UpdateFloodNetwork:
 
         # itinerary_df = pd.DataFrame.from_records(itinerary_entries)
         # append notes ID to the start and end coordinates
-        itinerary_df['start_nodesID'] = ox.distance.nearest_nodes(G_bus_flooded,X = itinerary_df['start_lon'], Y = itinerary_df['start_lat'])
-        itinerary_df['end_nodesID'] = ox.distance.nearest_nodes(G_bus_flooded,X = itinerary_df['end_lon'], Y = itinerary_df['end_lat'])
+        # itinerary_df['start_nodesID'] = ox.distance.nearest_nodes(G_bus_flooded,X = itinerary_df['start_lon'], Y = itinerary_df['start_lat'])
+        # itinerary_df['end_nodesID'] = ox.distance.nearest_nodes(G_bus_flooded,X = itinerary_df['end_lon'], Y = itinerary_df['end_lat'])
+        BT = publicTransit.BusTrip(G_bus_flooded, publicTransit_fp_list, planningArea)
         # save as csv
-        itinerary_df.to_csv(save_fp,index=False)
+        itinerary_df = BT.get_itinerary_entry(save_fp)
+        
         return itinerary_df
     
 
@@ -287,11 +308,20 @@ class TravelTimeDelay:
             IQR = d['75%_delay'] - d['25%_delay']
             d['whislow_delay'] = d['25%_delay'] - 1.5*IQR
             d['whishigh_delay'] = d['75%_delay'] + 1.5*IQR
+            # get count of delayed buses to identify how many routes and bus services are affected as additional column
+            if 'routeId' in row:
+                # remove NA 
+                buses = [j for i in row['routeId'] for j in str(i).split(',') if j != "nan"]
+                # get count of delayed buses to identify how many routes and bus services are affected
+                buses_delayed, buses_count = np.unique(buses,return_counts=True)
+                summary_buses_delayed = [f"{str(k)}:{v}" for k,v in zip(buses_delayed,buses_count)]
+                d['buses_delayed_id_count'] = ','.join(summary_buses_delayed)
+
             return pd.Series(d,index=list(d))
         
         # group by end_groupby and start_groupby
         travelTimeDelay_districts_df = itinerary_df.groupby([self.end_groupby,self.start_groupby]).apply(lambda x: summarise_func(x))
-        # TODO: # get count of delayed buses to identify how many routes and bus services are affected as additional column
+        
         travelTimeDelay_districts_df = travelTimeDelay_districts_df.reset_index()
         # save as csv is fp is not None
         if save_fp is not None:
@@ -299,9 +329,16 @@ class TravelTimeDelay:
         # convert to dict
         return travelTimeDelay_districts_df
     
-    def plot_total_travel_time_delay(self,xlabels=None,colors=None,width=0.6,title="",ax=None,save_fp=None):
+    def plot_total_travel_time_delay(self,travelTimeDelay_districts_df = None,stats_param='sum',
+                                    selected_planningArea=['TAMPINES','JURONG EAST','WOODLANDS','DOWNTOWN CORE','SELETAR'],
+                                    figsize=(6, 9),bbox_to_anchor=(0.4,-0.15),
+                                    xlabels=None,colors=None,width=0.6,title="",ax=None,save_fp=None):
         """ plot a horizontal bar chart of total travel time delay per planning area
         Args:
+            stats_param (str): column name in the stats_travel_time_delay that is used for plotting the sum
+            selected_planningArea (list): if None, plot all planning area. Else, list of planning areas to be plotted
+            figsize (tuple): figsize for matplotlib figure
+            bbox_to_anchor (tuple): matplotlib param for placing legends
             xlabels (list of str): list of x axis labels
             colors (dict): keys are REGION_N and values are rgb hex codes for each REGION_N
             width (float): width of each bar
@@ -310,22 +347,40 @@ class TravelTimeDelay:
             save_fp (str): file path to save figure to
         """
         # get stats of travel time delay
-        travelTimeDelay_districts_df = self.get_stats_travel_time_delay()
+        if travelTimeDelay_districts_df is None:
+            travelTimeDelay_districts_df = self.get_stats_travel_time_delay()
+        if selected_planningArea is not None:
+            # filter dataframe for selected planning areas
+            travelTimeDelay_districts_df = travelTimeDelay_districts_df[travelTimeDelay_districts_df[self.end_groupby].isin(selected_planningArea)]
         # convert df to dict
         travelTimeDelay_districts_dict = travelTimeDelay_districts_df.set_index([self.end_groupby,self.start_groupby]).to_dict(orient='index')
         # reorganise dict for plotting
         # first level of keys are region names, second level of keys are planning area names
-        plotting_dict = dict()
-        for (pln,region) in travelTimeDelay_districts_dict.keys():
-            plotting_dict[region] = dict()
-        for (pln,region),stats in travelTimeDelay_districts_dict.items():
-            plotting_dict[region][pln] = stats['sum']
+        # plotting_dict = dict()
+        # for (pln,region) in travelTimeDelay_districts_dict.keys():
+        #     plotting_dict[region] = dict()
+        # for (pln,region),stats in travelTimeDelay_districts_dict.items():
+        #     plotting_dict[region][pln] = stats['sum']
+        if selected_planningArea is None:
+            # plot all planning areas
+            PLN_AREA_N = [p for p in list(sorted(self.planningArea['PLN_AREA_N'].unique())) if 'ISLAND' not in p]
+            REGION_N = list(sorted(self.planningArea['REGION_N'].unique()))
+        else:
+            # plot for selected areas only
+            PLN_AREA_N = list(set([pln for (pln,_) in travelTimeDelay_districts_dict.keys()]))
+            REGION_N = list(set([region for (_,region) in travelTimeDelay_districts_dict.keys()]))
+        # reorganise dict for plotting
+        # first level of keys are region names, second level of keys are planning area names
+        plotting_dict = {region: {pln: 0 for pln in PLN_AREA_N} for region in REGION_N }
+        # iterate across planning area and region
+        for (pln, region), stats in travelTimeDelay_districts_dict.items():
+            plotting_dict[region][pln] = stats[stats_param]
         xlabels = list(plotting_dict[list(plotting_dict)[0]]) # planning area names
         # start baseline at 0
         bottom = np.zeros(len(xlabels))
 
         if ax is None:
-            fig, ax = plt.subplots(figsize=(6, 9))
+            fig, ax = plt.subplots(figsize=figsize)
 
         # assign colors to each region
         colors = {'EAST REGION':"#dffeb2","WEST REGION": "#ffe7c8","CENTRAL REGION":"#bedcfd",
@@ -337,46 +392,69 @@ class TravelTimeDelay:
                 label=region,left=bottom,color=colors[region])
             bottom += pln_time_delay
         
-        ax.set_ylabel("Work clusters")
+        ax.set_ylabel("Planning area")
         ax.set_xlabel("Total travel time delay (s)")
         ax.set_title(title)
         ax.invert_yaxis() # labels read top-to-bottom
-        ax.legend(loc='lower center',bbox_to_anchor=(0.4,-0.15),ncols=3)
+        ax.legend(loc='lower center',bbox_to_anchor=bbox_to_anchor,ncols=3)
         if save_fp is not None:
             plt.savefig(save_fp, bbox_inches = 'tight')
         if ax is None:
             plt.show()
         return plotting_dict
 
-    def plot_travel_time_delay_stats(self, selected_planningArea=['TAMPINES','JURONG EAST','WOODLANDS','DOWNTOWN CORE','SELETAR'],
-                                     save_fp=None):
+    def plot_travel_time_delay_stats(self, travelTimeDelay_districts_df = None,
+                                    selected_planningArea=['TAMPINES','JURONG EAST','WOODLANDS','DOWNTOWN CORE','SELETAR'],
+                                    figsize=(5*4,4),
+                                    title = "",
+                                    showmeans=True,
+                                    showwhiskers=True,
+                                    showfliers=False,
+                                    showcaps=False,
+                                    showbox=True,
+                                    save_fp=None):
         """ 
         plot modified boxplot for selected planning areas for routes that experienced travel time delay
         Args:
-            selected_planningArea (list): list of planning areas to be plotted
+            selected_planningArea (list): if None, plot all planning areas, else, list of planning areas to be plotted
+            figsize (tuple): figsize for matplotlib figure
+            title (str): title of plot
+            showmeans (bool): if True, show mean in the boxplot
+            showmedians (bool): if True, show median in the boxplot
+            showwhiskers (bool): if True, show whiskers in the boxplot
+            showfliers (bool): if True, show outliers in the boxplot
+            showcaps (bool): if True, show caps in the boxplot
+            showbox (bool): if True, show box in the boxplot
             save_fp (str): file path to save figure to
         """
-         # get stats of travel time delay
-        travelTimeDelay_districts_df = self.get_stats_travel_time_delay()
+        if travelTimeDelay_districts_df is None:
+            # get stats of travel time delay
+            travelTimeDelay_districts_df = self.get_stats_travel_time_delay()
         # assign colors to each region
         colors = {'EAST REGION':"#dffeb2","WEST REGION": "#ffe7c8","CENTRAL REGION":"#bedcfd",
                     'NORTH REGION':"#e9b3fd",'NORTH-EAST REGION':"#fdb3ba"}
-        # filter dataframe for selected planning areas
-        travelTimeDelay_districts_dict = travelTimeDelay_districts_df[travelTimeDelay_districts_df[self.end_groupby].isin(selected_planningArea)]
+        if selected_planningArea is not None:
+            # filter dataframe for selected planning areas
+            travelTimeDelay_districts_df = travelTimeDelay_districts_df[travelTimeDelay_districts_df[self.end_groupby].isin(selected_planningArea)]
+        
         # reorganise dict for plotting
-
-        regions =  travelTimeDelay_districts_dict[self.start_groupby].unique()
+        regions =  travelTimeDelay_districts_df[self.start_groupby].unique()
         # create a dictionary to store the plotting data
         plotting_dict = {region: [] for region in regions}
-        travelTimeDelay_districts_dict = travelTimeDelay_districts_dict.set_index([self.end_groupby,self.start_groupby]).to_dict(orient='index')
+        travelTimeDelay_districts_dict = travelTimeDelay_districts_df.set_index([self.end_groupby,self.start_groupby]).to_dict(orient='index')
 
         for (pln,region),stats in travelTimeDelay_districts_dict.items():
             med = stats['50%_delay']
             q1 = stats['25%_delay']
             q3 = stats['75%_delay']
             # modify whisker to be min and max instead of 1.5*IQR
-            whislo = stats['min_delay']
-            whishi = stats['max_delay']
+            if showwhiskers:
+                whislo = stats['min_delay']
+                whishi = stats['max_delay']
+            else:
+                # if show whiskers is false, show std dev around the mean
+                whislo = q1
+                whishi = q3
             mean = stats['mean_delay']
             d = {'med': med, 'q1': q1, 'q3': q3, 'whislo': whislo, 'whishi': whishi, 'mean': mean,
                 'label': pln, 'color': colors[region]}
@@ -387,20 +465,22 @@ class TravelTimeDelay:
                         fontsize=14,weight='bold')
         # # number of columns corresponds to number of regions
         ncols = len(regions)
-        fig, axes = plt.subplots(1,ncols,figsize=(ncols*4,4),sharey=True,sharex=True)
+        
+        fig, axes = plt.subplots(1,ncols,figsize=figsize,sharey=True,sharex=True)
         for (region,bxpstats_list),ax in zip(plotting_dict.items(),axes.flatten()):
             ax.bxp(bxpstats_list,orientation='horizontal',patch_artist=True,
                 boxprops=dict(facecolor=colors[region], edgecolor='k'),
                 medianprops=dict(color='k'),
                 meanprops=dict(marker='*', markerfacecolor='yellow', markeredgecolor='black',markersize=10),
                 whiskerprops=dict(color='k'),
-                showmeans=True,
-                showfliers=False,
-                showcaps=False,
-                showbox=True)
+                showmeans=showmeans,
+                showfliers=showfliers,
+                showcaps=showcaps,
+                showbox=showbox)
             ax.invert_yaxis() # labels read top-to-bottom
             ax.set_title(region,**ax_text_style)
             ax.set_xlabel("Travel time delay (s) for affected routes")
+        fig.suptitle(title)
         plt.tight_layout()
         if save_fp is not None:
             plt.savefig(save_fp, bbox_inches = 'tight')
