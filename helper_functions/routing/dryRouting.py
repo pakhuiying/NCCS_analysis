@@ -170,7 +170,7 @@ class PlotIsochrone:
         # add legend to the last subplot at the loc = lower right corner, box to anchor (x,y)
         # ax.legend(loc='lower right',  bbox_to_anchor=(1.0, 0.0), fontsize='medium')
         handles, labels = ax.get_legend_handles_labels()
-        fig.legend(handles, labels, loc = (0.5, 0.22), ncol=1, fontsize='medium')
+        fig.legend(handles, labels, loc = (0.5, 0.25), ncol=1, fontsize='medium')
         if save_fp is not None:
             plt.savefig(save_fp, bbox_inches = 'tight')
         # plt.tight_layout()

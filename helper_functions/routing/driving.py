@@ -11,6 +11,7 @@ from shapely.geometry import Polygon
 import shapely.ops as so
 import pandas as pd
 import numpy as np
+import warnings
 
 class CarTrip:
     def __init__(self, G,workplace_cluster,planningArea):
@@ -33,7 +34,6 @@ class CarTrip:
             pd.DataFrame: dataframe that shows the coordinates of workplace nodes and nodesId with planning area information
         """
         nodes_gdf = df[[f'{prefix}_nodesID',f'{prefix}_lat',f'{prefix}_lon']].drop_duplicates()
-        # print("Length of df: ",len(nodes_gdf.index))
         nodes_gdf = gpd.GeoDataFrame(
                     nodes_gdf, geometry=gpd.points_from_xy(nodes_gdf[f'{prefix}_lon'], nodes_gdf[f'{prefix}_lat']), crs="EPSG:4326"
                 )
@@ -46,8 +46,11 @@ class CarTrip:
         # keep column names that contains "PLN_AREA_N" or "REGION_N"
         nodes_gdf = nodes_gdf.loc[:,nodes_gdf.columns.str.contains("nodesID|PLN_AREA|REGION")]
 
-        # merge nodes_gdf with df based on the nodesID
-        df = df.merge(nodes_gdf, how="left", left_on=f"{prefix}_nodesID", right_on=f"{prefix}_nodesID")
+        # merge nodes_gdf with df based on the nodesID, how="inner" preserves only the rows that have matching nodesID in both dataframes
+        # validate="many_to_one" check if merge keys are unique in right dataset. if merge keys are not unique in the right dataset, it will throw an error
+        # indicator=True adds a column "_merge" to the output DataFrame, which indicates whether each row was found in both DataFrames or only in one of them
+        df = df.merge(nodes_gdf, how="inner", left_on=f"{prefix}_nodesID", right_on=f"{prefix}_nodesID",
+                      indicator=True, validate="many_to_one")
         return df
     
     def get_itinerary_entry(self,cost="travel_time"):
@@ -73,7 +76,7 @@ class CarTrip:
             # PLN_AREA_N = row['PLN_AREA_N']
             # REGION_N = row['REGION_N']
             # returns a dict keyed by target, values are shortest path length from the source to the target
-            route_times = nx.shortest_path_length(self.G,source=node_id, target=None, weight=cost)
+            route_times = nx.shortest_path_length(self.G,source=None, target=node_id, weight=cost)
             df = pd.DataFrame({'start_nodesID': list(route_times),'simulated_total_duration': list(route_times.values())})
             df['end_nodesID'] = node_id
             df['end_lat'] = end_lat
@@ -86,11 +89,18 @@ class CarTrip:
         itinerary_df = itinerary_df.merge(nodes_gdf,how="left",on="start_nodesID")
         # cast as int64
         itinerary_df[['start_nodesID','end_nodesID']] = itinerary_df[['start_nodesID','end_nodesID']].astype(int)
-
+        prev_len = len(itinerary_df)
         # spatial join between start_nodesID with planning area
         itinerary_df = self.spatial_join_with_planning_area(itinerary_df,prefix="start")
+        # rename merge column
+        itinerary_df = itinerary_df.rename(columns={"_merge":"start_merge"})
         # spatial join between end_nodesID with planning area
         itinerary_df = self.spatial_join_with_planning_area(itinerary_df,prefix="end")
+        # rename merge column
+        itinerary_df = itinerary_df.rename(columns={"_merge":"end_merge"})
+        after_len = len(itinerary_df)
+        if prev_len != after_len:
+            warnings.warn(f"Length of df before and after spatial join is not the same: {prev_len} vs {after_len}. This may be due to missing planning area information for some nodes.")
         return itinerary_df
     
 def get_shortest_path_driving(G, orig, dest=None,
