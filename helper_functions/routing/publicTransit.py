@@ -1,6 +1,7 @@
 import requests
 import numpy as np
 import pandas as pd
+import geopandas as gpd
 import os
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -8,6 +9,7 @@ import osmnx as ox
 import networkx as nx
 import importlib
 import LTA_API_key
+import warnings
 import helper_functions.utils
 importlib.reload(LTA_API_key)
 importlib.reload(helper_functions.utils)
@@ -823,3 +825,87 @@ def itinerary_entry_generator(G_bus,fp_list):
             except Exception as e:
                 # print(f"{fp}: {e}")
                 pass    
+
+class BusTrip:
+    """
+    generates bus_itinerary_df
+    """
+    def __init__(self, G, fp_list, planningArea):
+        """ 
+        Args:
+            G (MultiDiGraph): graph of drive bus network
+            fp_list (list): list of filepaths to itinerary json files e.g. json file that list routes as list of nodes
+            planningArea (geopandas.GeoDataFrame): dataframe that shows the planning area that has columns: PLN_AREA_N and REGION_N
+        """
+        self.G = G
+        self.fp_list = fp_list
+        self.planningArea = planningArea
+
+    def spatial_join_with_planning_area(self,df,prefix):
+        """ 
+        Args:
+            df (pd.DataFrame): dataframe that shows the coordinates and node IDs of start nodes and end nodes
+            prefix (str): prefix to locate and rename columns in the dataframe
+        Returns:
+            pd.DataFrame: dataframe that shows the coordinates of workplace nodes and nodesId with planning area information
+        """
+        unique_nodes_gdf = df[[f'{prefix}_nodesID']].drop_duplicates().reset_index(drop=True) # drop=True to avoid adding index column
+        # print("Length of unique nodes: ",len(unique_nodes_gdf.index))
+        # use coordinates that corresponds to the nodesID in G, so that different latitude and longitude values will not result in the same nodesID
+        # do not use the coordinates from df, as they may not correspond to the nodesID in G
+        nodes_gdf = ox.graph_to_gdfs(self.G,nodes=True, edges=False)
+        nodes_gdf = nodes_gdf[['y','x']].reset_index() # index are osmid
+        nodes_gdf = nodes_gdf.rename(columns={"osmid":f"{prefix}_nodesID","y":f"{prefix}_lat","x":f"{prefix}_lon"})
+        # filter nodes_gdf to only include nodes that are in unique_nodes_gdf
+        nodes_gdf = nodes_gdf[nodes_gdf[f'{prefix}_nodesID'].isin(unique_nodes_gdf[f'{prefix}_nodesID'])]
+        # convert into gpd
+        nodes_gdf = gpd.GeoDataFrame(
+                    nodes_gdf, geometry=gpd.points_from_xy(nodes_gdf[f'{prefix}_lon'], nodes_gdf[f'{prefix}_lat']), crs="EPSG:4326"
+                )
+        # select only relevant columns
+        nodes_gdf = nodes_gdf.sjoin(self.planningArea[['PLN_AREA_N','PLN_AREA_C','REGION_N','REGION_C','geometry']], how="left")
+        # print("Length of df: ",len(nodes_gdf.index))
+        # rename columns with a prefix of "start_", if columns already have a "start_" prefix, skip renaming
+        nodes_gdf = nodes_gdf.rename(columns=lambda x: f"{prefix}_{x}" if not x.startswith(f"{prefix}_") else x)
+
+        # keep column names that contains "PLN_AREA_N" or "REGION_N"
+        nodes_gdf = nodes_gdf.loc[:,nodes_gdf.columns.str.contains("nodesID|PLN_AREA|REGION")]
+
+        # merge nodes_gdf with df based on the nodesID, how="inner" preserves only the rows that have matching nodesID in both dataframes
+        # validate="many_to_one" check if merge keys are unique in right dataset. if merge keys are not unique in the right dataset, it will throw an error
+        # indicator=True adds a column "_merge" to the output DataFrame, which indicates whether each row was found in both DataFrames or only in one of them
+        df = df.merge(nodes_gdf, how="inner", left_on=f"{prefix}_nodesID", right_on=f"{prefix}_nodesID",
+                      indicator=True, validate="many_to_one")
+        return df
+    
+    def get_itinerary_entry(self,save_fp=None):
+        """ 
+        generates bus_itinerary_df
+        Args:
+            save_fp (str or None): if not None, save the bus itinerary df to this filepath
+        Returns:
+            pd.DataFrame: bus itinerary df
+        """
+        # concatenate the generator into a single DataFrame
+        itinerary_df = pd.DataFrame.from_records(itinerary_entry_generator(self.G,self.fp_list))
+        # remove rows with number_of_busroutes == 0
+        itinerary_df = itinerary_df[itinerary_df['number_of_busroutes'] > 0]
+        # append nodes ID to the start and end coordinates
+        itinerary_df['start_nodesID'] = ox.distance.nearest_nodes(self.G,X = itinerary_df['start_lon'], Y = itinerary_df['start_lat'])
+        itinerary_df['end_nodesID'] = ox.distance.nearest_nodes(self.G,X = itinerary_df['end_lon'], Y = itinerary_df['end_lat'])
+        prev_len = len(itinerary_df)
+        # spatial join between start_nodesID with planning area
+        itinerary_df = self.spatial_join_with_planning_area(itinerary_df,prefix="start")
+        # rename merge column
+        itinerary_df = itinerary_df.rename(columns={"_merge":"start_merge"})
+        # spatial join between end_nodesID with planning area
+        itinerary_df = self.spatial_join_with_planning_area(itinerary_df,prefix="end")
+        # rename merge column
+        itinerary_df = itinerary_df.rename(columns={"_merge":"end_merge"})
+        after_len = len(itinerary_df)
+        if prev_len != after_len:
+            warnings.warn(f"Length of df before and after spatial join is not the same: {prev_len} vs {after_len}. This may be due to missing planning area information for some nodes.")
+        if save_fp is not None:
+            # export as csv
+            itinerary_df.to_csv(save_fp, index=False)
+        return itinerary_df
