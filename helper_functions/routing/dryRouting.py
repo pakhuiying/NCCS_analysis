@@ -8,11 +8,13 @@ import os
 import pandas as pd
 import numpy as np
 import copy
+from math import ceil
+import re
 import helper_functions.routing.publicTransit as publicTransit
 import helper_functions.routing.driving as driving
 import helper_functions.routing.floodedRouting as floodedRouting
 import helper_functions.plot_utils as plot_utils
-from math import ceil
+
 
 class PlotIsochrone:
     def __init__(self, G, master_itinerary_df, planningArea):
@@ -41,10 +43,10 @@ class PlotIsochrone:
 
     def plot_shortest_path_route(self,itinerary_df,column_value,
                                     flooded_edges=None,ax=None,
-                                    flooded_edge_color="red",
                                     cmap="plasma",cbar=None,
                                     node_size=5,node_alpha=0.8,
-                                    edge_linewidth=0.2,edge_color="#999999"):
+                                    edge_linewidth=0.2,flooded_edge_linewidth=2,
+                                    edge_color="#999999", flooded_edge_color="blue"):
         """ 
         plot an isochrone using the simulated total duration
         Args:
@@ -52,13 +54,16 @@ class PlotIsochrone:
             column_value (str): column in itinerary_df which will determine the plotting of node colors on G e.g. travel_time_delay or simulated_total_travel_time
             flooded_edges (list): list of edges in G representing flooded roads. Default is None, it wont plot flooded edges
             ax (mpl.Axes): if None, plot on a new figure, else plot on supplied Axes
-            cmap (str): cmap for colouring the isochrones
             cbar (ScalarMappable or None): if None, use cmap to automatically generate unique colours based on number of nodes. Else, use cbar to map values to colours
                 Define cbar: cbar = plot_utils.get_colorbar(vmin=0,vmax=3600,cmap="plasma",plot=False)
+            cmap (str): cmap for colouring the isochrones. Default is plasma
             node_size (float or Iterable): size of nodes for plotting
             node_alpha (float): transparency of nodes
-            edge_linewidth (float or Iterable): width of edges for plotting
-            edge_color (float or Iterable): colour of edges for plotting
+            flooded_edges is not None:
+                edge_linewidth (float): width of non-flooded edges. If 0, skip plotting edges
+                flooded_edge_linewidth (float): width of flooded edges. If 0, skip plotting edges
+                edge_color (str): colour of non_flooded edges for plotting. If "none", color is transparent
+                flooded_edge_color (str): colour of flooded edges for plotting. If "none", color is transparent
         Returns:
             dict: sorted route times, where key are start_nodesID, and values are route times
         """
@@ -79,46 +84,65 @@ class PlotIsochrone:
         node_colors = {node: nc_ for node, nc_ in zip(list(route_times),iso_colors)}
         nc = [node_colors[node] if node in node_colors else "none" for node in self.G.nodes() ]
         ns = [node_size if node in node_colors else 0 for node in self.G.nodes()]
-        # plot flooded edges, overlay flooded roads
-        if flooded_edges is not None:
-            edge_color = [flooded_edge_color if e in flooded_edges else "white" for e in self.G.edges(keys=True) ]
-            edge_linewidth = [int(edge_linewidth*10) if e in flooded_edges else edge_linewidth for e in self.G.edges(keys=True) ]
+        # plot nodes
         fig, ax = ox.plot_graph(
             self.G,
             ax=ax,
             node_color=nc,
             node_size=ns,
             node_alpha=node_alpha,
-            edge_linewidth=edge_linewidth,
-            edge_color=edge_color,
+            edge_linewidth=0, # If 0, then skip plotting the edges.
+            # edge_linewidth=edge_linewidth,
+            # edge_color=edge_color,
             show = False,
             close = False
         )
+        # plot flooded edges, overlay flooded roads
+        if flooded_edges is not None:
+            edge_color = [flooded_edge_color if e in flooded_edges else edge_color for e in self.G.edges(keys=True) ]
+            edge_linewidth = [flooded_edge_linewidth if e in flooded_edges else edge_linewidth for e in self.G.edges(keys=True) ]
+            fig, ax = ox.plot_graph(
+                self.G,
+                ax=ax,
+                node_size=0, # If 0, then skip plotting the nodes.
+                edge_linewidth=edge_linewidth,
+                edge_color=edge_color,
+                show = False,
+                close = False
+            )
         
         return route_times
 
     def plot_isochrone(self, itinerary_df_list, column_value, flooded_edges=None,
-                            cmap="plasma",flooded_edge_color="red",
                             title="",colorbar_label="",ncols=5,
-                            workplace_node_color="red",
+                            workplace_node_color="red", workplace_node_size=30,
                             cbar=None,cbar_orientation="horizontal",
-                            save_fp=None):
+                            save_fp=None, **kwargs):
         """ 
         plot gridded isochrones using the simulated total duration
         Args:
             itinerary_df_list (dict): keys are groupby_name, values are pd.DataFrame
             column_value (str): column in itinerary_df which will determine the plotting of node colors on G e.g. travel_time_delay or simulated_total_travel_time
             flooded_edges (list): list of edges in G representing flooded roads. Default is None, it wont plot flooded edges
-            cmap (str): cmap for colouring the isochrones
-            flooded_edge_color (str): color for showing flooded roads
             title (str): title for figure
             colorbar_label (str): label for colorbar e.g. Total travel time delay (s)
             ncols (int): number of columns in figure
             workplace_node_color (str): color for showing destination aka workplace node
+            workplace_node_size (float): marker size for showing destination aka workplace node
             cbar (ScalarMappable or None): if None, use cmap to automatically generate unique colours based on number of nodes. Else, use cbar to map values to colours
                 Define cbar: cbar = plot_utils.get_colorbar(vmin=0,vmax=3600,cmap="plasma",plot=False)
             cbar_orientation (str): orientation of colorbar, either "horizontal" or "vertical"
             save_fp (str): file path to save figure to
+            **kwargs (keyword arguments): for plotting of the isochrone by calling the plotting arguments in plot_shortest_path_route method
+            kwargs:
+                cmap (str): cmap for colouring the isochrones. Default is plasma
+                node_size (float or Iterable): size of nodes for plotting
+                node_alpha (float): transparency of nodes
+                flooded_edges is not None:
+                edge_linewidth (float): width of non-flooded edges. If 0, skip plotting edges
+                flooded_edge_linewidth (float): width of flooded edges. If 0, skip plotting edges
+                edge_color (str): colour of non_flooded edges for plotting. If "none", color is transparent
+                flooded_edge_color (str): colour of flooded edges for plotting. If "none", color is transparent
         Returns:
             dict: sorted route times, where key are start_nodesID, and values are route times
         """
@@ -129,7 +153,7 @@ class PlotIsochrone:
         nrows = ceil(n_clusters/ncols)
         if cbar is None:
             # define cbar 
-            cbar = plot_utils.get_colorbar(vmin=0,vmax=self.master_itinerary_df[column_value].max(),cmap=cmap,plot=False)
+            cbar = plot_utils.get_colorbar(vmin=0,vmax=self.master_itinerary_df[column_value].max(),cmap=kwargs['cmap'],plot=False)
         # plot
         fig, axes = plt.subplots(nrows, ncols, figsize = (ncols*4,nrows*3))
         for i, ((PLN_AREA_N,itinerary_df),ax) in enumerate(zip(itinerary_df_list.items(),axes.flatten())):
@@ -149,10 +173,10 @@ class PlotIsochrone:
             # plot isochrone
             self.plot_shortest_path_route(itinerary_df,column_value=column_value,
                                             flooded_edges=flooded_edges,ax=ax,
-                                            cbar=cbar,cmap=cmap,flooded_edge_color=flooded_edge_color
+                                            **kwargs
                                             )
             # plot orig node
-            ax.scatter(lon,lat,marker="X",c=workplace_node_color,s=25,label="Workplace node")
+            ax.scatter(lon,lat,marker="X",c=workplace_node_color,edgecolors="black",s=workplace_node_size,label="Workplace node")
             # add figure label and title 
             # add subplot label ({chr(97+i)}) 
             ax.set_title(f'{PLN_AREA_N} ({REGION_N})')
@@ -170,10 +194,16 @@ class PlotIsochrone:
         # add legend to the last subplot at the loc = lower right corner, box to anchor (x,y)
         # ax.legend(loc='lower right',  bbox_to_anchor=(1.0, 0.0), fontsize='medium')
         handles, labels = ax.get_legend_handles_labels()
-        fig.legend(handles, labels, loc = (0.5, 0.25), ncol=1, fontsize='medium')
+        # manually add legend for flooded roads
+        if flooded_edges is not None:
+            handles.append(Line2D([0], [0], color=kwargs['flooded_edge_color'], lw=kwargs['flooded_edge_linewidth']))
+            labels.append("Flooded roads")
+        fig.legend(handles, labels, loc = (0.5, 0.25), ncol=len(handles), fontsize='medium')
         if save_fp is not None:
             plt.savefig(save_fp, bbox_inches = 'tight')
         # plt.tight_layout()
         plt.show()
         return
+
+    
 

@@ -666,17 +666,20 @@ class PublicTransitRouting:
             # export as json
             utils.json_data(save_itinerary, save_fp)
         return save_itinerary
+    
 class TripItinerary:
     """helper functions for processing public transit itinerary json file into a consolidated pd.DataFrame"""
-    def __init__(self,G, itinerary):
+    def __init__(self,G, itinerary, fp):
         """ 
         Args:
             G (G): driving network
             itinerary (dict): itinerary from public transit routing
+            fp (str): filepath to the itinerary, or it can be a unique ID corresponding to the itinerary
         """
         self.G = G
         self.itinerary = itinerary
         self.error_flag = self.itinerary['error_flag']
+        self.fp = fp
 
     @classmethod
     def from_file(cls, G, fp):
@@ -687,7 +690,7 @@ class TripItinerary:
             dict: itinerary object
         """
         itinerary = utils.load_json(fp)
-        return cls(G, itinerary)
+        return cls(G, itinerary,fp)
 
     def bounding_box_coords(self,start_coords,end_coords):
         """ 
@@ -714,12 +717,17 @@ class TripItinerary:
         routes = []
         rc = []
         routeId = []
+        ORIGIN_PT_CODE = [] # store the start bus stop IDs for each bus journey
+        DESTINATION_PT_CODE = [] # store the end bus stop IDs for each bus journey
         for i, busLeg in enumerate(self.itinerary['busLegs']):
             ix_color = i%len(color_cycler)
             routes.append(busLeg['routesNodesID'])
             rc.append(color_cycler[ix_color])
             routeId.append(busLeg['routeId'])
-        return routes, routeId, rc
+            # also append the bus stop ids for start and stop 
+            ORIGIN_PT_CODE.append(busLeg['busLeg'][0]['stopCode'])
+            DESTINATION_PT_CODE.append(busLeg['busLeg'][-1]['stopCode'])
+        return routes, routeId, ORIGIN_PT_CODE, DESTINATION_PT_CODE, rc
 
     def get_route_time_and_distance(self,route):
         """ get simulated route time and distance via osmnx
@@ -735,11 +743,12 @@ class TripItinerary:
     def get_non_bus_duration(self):
         """ get non bus duration from OneMap itinerary e.g. total duration - bus duration
         Returns:
-            tuple: total duration, time spend on buses. time spent on non-bus public transit (e.g. walking, mrt travel duration, time spent at bus stops & traffic lights, etc) 
+            tuple: total duration, time spend on buses (list of float), total time spent on buses. time spent on non-bus public transit (e.g. walking, mrt travel duration, time spent at bus stops & traffic lights, etc) 
         """
         total_duration = float(self.itinerary['duration'])
-        bus_duration = sum([float(busLeg['duration']) for busLeg in self.itinerary['busLegs']])
-        return total_duration, bus_duration
+        bus_duration = [float(busLeg['duration']) for busLeg in self.itinerary['busLegs']]
+        total_bus_duration = sum(bus_duration)
+        return total_duration, bus_duration, total_bus_duration
 
     def plot_itinerary(self, 
                     ax = None,
@@ -758,7 +767,7 @@ class TripItinerary:
         # get graph limits
         min_lat,max_lat,delta_lat,min_lon,max_lon,delta_lon = self.bounding_box_coords(start_coords,end_coords)
         
-        routes, routeId ,rc = self.get_itinerary_bus_routes()
+        routes, routeId ,ORIGIN_PT_CODE, DESTINATION_PT_CODE,rc = self.get_itinerary_bus_routes()
         fig, ax = ox.plot_graph_routes(self.G, routes, route_colors=rc, route_linewidth=6, node_size=0,
                                     ax=ax,show=False,close=False)
         
@@ -788,24 +797,34 @@ class TripItinerary:
             start_lon = self.itinerary['start_lon']
             end_lat = self.itinerary['end_lat']
             end_lon = self.itinerary['end_lon']
-            actual_total_duration, actual_bus_duration = self.get_non_bus_duration()
-            non_bus_duration = actual_total_duration - actual_bus_duration
-            routes, routeId, _ = self.get_itinerary_bus_routes()
+            actual_total_duration, actual_bus_duration, total_actual_bus_duration = self.get_non_bus_duration()
+            # concatenate actual_bus_duration (list of float) as a string to represent time taken for each bus journey (relevant for itineraries with more than 1 bus journeys)
+            actual_bus_duration = ','.join([str(i) for i in actual_bus_duration])
+            non_bus_duration = actual_total_duration - total_actual_bus_duration
+            routes, routeId, ORIGIN_PT_CODE, DESTINATION_PT_CODE, _ = self.get_itinerary_bus_routes()
             actual_bus_distance = sum([float(busLeg['distance']) for busLeg in self.itinerary['busLegs']])
-            simulated_bus_distance = simulated_bus_duration = 0
+            total_simulated_bus_distance = total_simulated_bus_duration = 0
+            
+            # store simulated bus duration as a list to obtain the bus duration for each bus route
+            simulated_bus_duration = []
             for r in routes:
                 route_length,route_time = self.get_route_time_and_distance(r)
-                simulated_bus_distance += route_length
-                simulated_bus_duration += route_time
-            number_of_busroutes = len(self.itinerary['busLegs'])
-            simulated_total_duration = non_bus_duration + simulated_bus_duration
-            return_dict = {'start_lat':start_lat,'start_lon':start_lon,'end_lat':end_lat,'end_lon':end_lon,
+                total_simulated_bus_distance += route_length
+                total_simulated_bus_duration += route_time
+                simulated_bus_duration.append(route_time)
+            # save a list of simulated bus duration as a string to get the breakdown of duration per bus route
+            simulated_bus_duration = ','.join([str(d) for d in simulated_bus_duration])
+            number_of_busroutes = len(self.itinerary['busLegs']) # includes flooded and non-flooded routes
+            simulated_total_duration = non_bus_duration + total_simulated_bus_duration
+            return_dict = {'filepath':os.path.basename(self.fp), 'start_lat':start_lat,'start_lon':start_lon,'end_lat':end_lat,'end_lon':end_lon,
                     'duration':self.itinerary['duration'],'transitTime':self.itinerary['transitTime'],
                     'waitingTime':self.itinerary['waitingTime'],'transfers':self.itinerary['transfers'],
-                    'actual_bus_duration':actual_bus_duration,'simulated_bus_duration':simulated_bus_duration,
-                    'actual_bus_distance':actual_bus_distance,'simulated_bus_distance':simulated_bus_distance,
+                    'actual_bus_duration':actual_bus_duration,'total_actual_bus_duration':total_actual_bus_duration,
+                    'simulated_bus_duration':simulated_bus_duration,'total_simulated_bus_duration':total_simulated_bus_duration,
+                    'actual_bus_distance':actual_bus_distance,'total_simulated_bus_distance':total_simulated_bus_distance,
                     'actual_total_duration':actual_total_duration,'simulated_total_duration':simulated_total_duration,
-                    'non_bus_duration':non_bus_duration,'number_of_busroutes':number_of_busroutes, 'routeId':','.join(routeId),
+                    'non_bus_duration':non_bus_duration,'number_of_busroutes':number_of_busroutes, 
+                    'routeId':','.join(routeId),'ORIGIN_PT_CODE':','.join(ORIGIN_PT_CODE),'DESTINATION_PT_CODE':','.join(DESTINATION_PT_CODE)
                     }
             
             return return_dict

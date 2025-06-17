@@ -8,6 +8,7 @@ import os
 import pandas as pd
 import numpy as np
 import copy
+import re
 import warnings
 import helper_functions.routing.publicTransit as publicTransit
 import helper_functions.routing.driving as driving
@@ -62,6 +63,65 @@ class UpdateFloodNetwork:
             )
         return flooded_edges
 
+    def get_coastal_flood_coordinates(self,flood_arr,geotransform,flood_depth_thresh=0.15):
+        """ Get indices of array where flood depth exceeds 0.15 m
+        Args:
+            flood_arr (np.ndarray): flood depth array in metres
+            geotransform (tuple of float): GetGeoTransform() function returns tuple with 6 values (coordinates of origin, resolution, angle),
+            flood_depth_thresh (np.ndarray): threshold (in metres) on the flood_arr, above this threshold, fetch the corresponding coordinates
+        Returns:
+            list of tuple: list of coordinates (lat,lon)
+        """
+        flood_idx = np.argwhere(flood_arr > flood_depth_thresh)
+        def get_coords(dx,dy):
+            """" 
+            Args:
+                dx (int): column pixel from the origin (upper left corner)
+                dy (int): row pixel from the origin (upper left corner)
+            """
+            # origin
+            px = geotransform[0]
+            py = geotransform[3]
+            # pixel size
+            rx = geotransform[1]
+            ry = geotransform[5]
+            x = dx*rx + px
+            y = dy*ry + py
+            return y,x
+
+        return [get_coords(idx[1],idx[0]) for idx in flood_idx]
+
+    def identify_coastal_flooded_roads(self,flooded_coordinates, plot=True, ax = None,
+                               flooded_edge_color="red",edge_color="white", flooded_edge_linewidth=2):
+        """ 
+        Add attribute traffic_flow to G. 
+        Traffic flow Returns hourly average traffic flow, taken from a representative month of every quarter during 0700-0900 hours.
+        Args:
+            G (G): driving route
+            flooded_coordinates (list of float tuple): [(lat,lon),(lat,lon)]
+            plot (bool): if True, plot traffic volume
+            ax (mpl.Axes): if None, plot on a new figure, else, plot on supplied ax
+        Returns:
+            list: list of edges representing flooded roads
+        """
+        G_copy = copy.deepcopy(self.G) # deep copy so it does not change the original
+        # get nearest edges to flooded edges
+        flooded_edges = ox.distance.nearest_edges(G_copy,X = [coord[1] for coord in flooded_coordinates], Y = [coord[0] for coord in flooded_coordinates])
+        flooded_edges = list(flooded_edges)
+        if plot:
+            ec = [flooded_edge_color if e in flooded_edges else edge_color for e in self.G.edges(keys=True) ]
+            ew = [flooded_edge_linewidth if e in flooded_edges else 0.2 for e in self.G.edges(keys=True) ]
+            fig, ax = ox.plot_graph(
+                self.G,
+                node_size=0,
+                edge_color = ec,
+                edge_linewidth=ew,
+                ax=ax,
+                show = False,
+                close = False
+            )
+        return flooded_edges
+    
     def update_flooded_road_network(self, flooded_edges, plot=True,cmap="plasma",**kwargs):
         """
         Args:
@@ -286,7 +346,7 @@ class TravelTimeDelay:
         Returns:
             dict: keys are a tuple of (end_groupby, start_groupby), corresponding to planning area and region 
                 values are descriptive statistics of travel time delay
-            pd.DataFrame: if save_fp is not None, export it as csv.
+            pd.DataFrame: travelTimeDelay_districts_df that summarises the statistics of travel time delay by planning area and region.
         """
         if itinerary_df is None:
             # compute travel time delay
@@ -335,6 +395,7 @@ class TravelTimeDelay:
                                     xlabels=None,colors=None,width=0.6,title="",ax=None,save_fp=None):
         """ plot a horizontal bar chart of total travel time delay per planning area
         Args:
+            travelTimeDelay_districts_df (pd.DataFrame): dataframe that summarises the statistics of travel time delay by planning area and region. If None, calculate it using internal method.
             stats_param (str): column name in the stats_travel_time_delay that is used for plotting the sum
             selected_planningArea (list): if None, plot all planning area. Else, list of planning areas to be plotted
             figsize (tuple): figsize for matplotlib figure
@@ -402,6 +463,44 @@ class TravelTimeDelay:
         if ax is None:
             plt.show()
         return plotting_dict
+    
+    def get_potential_car_time_delay(self,trafficVol,travelTimeDelay_districts_df = None):
+        """   get potential total travel time delay based on the road with the highest max traffic volume
+        Args:
+            trafficVol (pd.DataFrame): traffic volume from region to planning area
+            travelTimeDelay_districts_df (pd.DataFrame): dataframe that summarises the statistics of travel time delay by planning area and region. If None, calculate it using internal method.
+        """
+        if travelTimeDelay_districts_df is None:
+            # get stats of travel time delay
+            travelTimeDelay_districts_df = self.get_stats_travel_time_delay()
+        columns_select = [i for i in trafficVol.columns if bool(re.search("^max_traffic.*REGION$",i))]
+        # rename columns
+        trafficVol_long = trafficVol[['PLN_AREA_N']+columns_select].rename(columns = lambda x: x.replace("max_traffic_",""))
+        # cast table from wide to long
+        trafficVol_long = pd.melt(trafficVol_long,id_vars=['PLN_AREA_N'],var_name="REGION_N", value_name="max_traffic_vol")
+        # merge traffic vol df with travel time delay stats df
+        trafficVol_stats = pd.merge(left=trafficVol_long,right=travelTimeDelay_districts_df,
+                                    how="inner",left_on=['PLN_AREA_N','REGION_N'], right_on=[self.end_groupby,self.start_groupby])
+        
+        stats_col = ['mean_delay','min_delay', '25%_delay', '50%_delay', '75%_delay','max_delay']
+        for col in stats_col:
+            # get probability of routes affected
+            prop_routes_affected = trafficVol_stats['count_delay']/trafficVol_stats['count']
+            # num of cars affected
+            max_traffic_vol = trafficVol_stats['max_traffic_vol']
+            trafficVol_stats[f"potential_total_{col}"] = max_traffic_vol*prop_routes_affected*trafficVol_stats[col]
+
+        return trafficVol_stats
+    
+    def get_potential_publicTransit_time_delay(self,tripVol,travelTimeDelay_districts_df = None):
+        """   get potential total travel time delay based on the commuter trip volume
+        Args:
+            tripVol (pd.DataFrame): trip volume from region to planning area
+            travelTimeDelay_districts_df (pd.DataFrame): dataframe that summarises the statistics of travel time delay by planning area and region. If None, calculate it using internal method.
+        """
+        if travelTimeDelay_districts_df is None:
+            # get stats of travel time delay
+            travelTimeDelay_districts_df = self.get_stats_travel_time_delay()
 
     def plot_travel_time_delay_stats(self, travelTimeDelay_districts_df = None,
                                     selected_planningArea=['TAMPINES','JURONG EAST','WOODLANDS','DOWNTOWN CORE','SELETAR'],
@@ -416,6 +515,7 @@ class TravelTimeDelay:
         """ 
         plot modified boxplot for selected planning areas for routes that experienced travel time delay
         Args:
+            travelTimeDelay_districts_df (pd.DataFrame): dataframe that summarises the statistics of travel time delay by planning area and region. If None, calculate it using internal method.
             selected_planningArea (list): if None, plot all planning areas, else, list of planning areas to be plotted
             figsize (tuple): figsize for matplotlib figure
             title (str): title of plot
@@ -728,3 +828,57 @@ class TravelTimeDelay:
         plt.show()
         return
 
+# write a function that fetches the saved csv files
+def fetch_data(save_dir,transport_mode,routing=True, stats=True):
+    """   
+    Args:
+        save_dir (str): folder where data is stored
+        transport_mode (str): car or bus
+        routing (bool): If True, fetches *_routing_*.csv
+        stats (bool): If True
+    Returns:
+        dict: keys are: flooded_edges, routing, stats
+    """
+    fps = dict()
+
+    def fetch_flooded_edges(flooded_dir):
+        # fetch flooded edges fp
+        return [os.path.join(flooded_dir,fp) for fp in os.listdir(flooded_dir) if bool(re.search("^flooded_edges.*pkl$",fp))]
+    
+    if bool(re.search("compoundFloodRouting" ,save_dir)):
+        # compound flooding scenario
+        coastal_flood_dir = save_dir.replace("compound","coastal")
+        pluvial_flood_dir = save_dir.replace("compoundF","f")
+        coastal_flood_fp = fetch_flooded_edges(coastal_flood_dir)
+        pluvial_flood_fp = fetch_flooded_edges(pluvial_flood_dir)
+        flooded_edges_fp = coastal_flood_fp + pluvial_flood_fp
+    else:
+        flooded_edges_fp = fetch_flooded_edges(save_dir)
+
+    fps['flooded_edges'] = flooded_edges_fp
+
+    if bool(re.search("compoundFloodRouting" ,save_dir)):
+        title = f"Mode of transport: {transport_mode}; Scenario: Compound flooding; "
+    elif bool(re.search("coastalFloodRouting" ,save_dir)):
+        title = f"Mode of transport: {transport_mode}; Scenario: Coastal flooding; "
+    else:
+        title = f"Mode of transport: {transport_mode}; Scenario: Pluvial flooding; "
+
+    def get_title(fp):
+        title = os.path.splitext(os.path.basename(fp))[0].split("_")[-1]
+        if "maxspeed" in title:
+            title = f"Maximum speed on flooded roads = {title.replace("maxspeed","")} km/h"
+        elif "percReducMaxspeed" in title:
+            title = f"Percentage speed reduction on flooded roads = {title.replace("percReducMaxspeed","")} %"
+        return title
+    
+    if routing:
+        routing_fp = [os.path.join(save_dir,fp) for fp in os.listdir(save_dir) if bool(re.search(f"^{transport_mode}.*_routing_.*csv$",fp))]
+        fps['routing'] = routing_fp
+        fps['title'] = [title + get_title(fp) for fp in routing_fp]
+        
+    if stats:
+        stats_fp = [os.path.join(save_dir,fp) for fp in os.listdir(save_dir) if bool(re.search(f"^{transport_mode}.*_stats_.*csv$",fp))]
+        fps['stats'] = stats_fp
+    
+    return fps
