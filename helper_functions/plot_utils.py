@@ -91,3 +91,8 @@ def get_colorbar(vmin,vmax,label="Units",cmap="plasma",orientation="horizontal",
     # else:
     #     fig.colorbar(cbar,ax=ax, orientation=orientation, label=label)
     return cbar
+
+# reorder legend by row instead of column
+reorder_legend = lambda l, nc: sum((l[i::nc] for i in range(nc)), []) #hl = handles/lanels, nc=number of columns
+# usage example
+# fig.legend(handles=reorder(handles,n_assum),loc=loc, ncol=n_assum, fontsize='medium')
