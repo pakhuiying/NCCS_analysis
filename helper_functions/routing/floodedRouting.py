@@ -492,15 +492,57 @@ class TravelTimeDelay:
 
         return trafficVol_stats
     
-    def get_potential_publicTransit_time_delay(self,tripVol,travelTimeDelay_districts_df = None):
+    def get_potential_publicTransit_time_delay(self,OD_tripVol, travel_time_delay_df=None):
         """   get potential total travel time delay based on the commuter trip volume
         Args:
-            tripVol (pd.DataFrame): trip volume from region to planning area
-            travelTimeDelay_districts_df (pd.DataFrame): dataframe that summarises the statistics of travel time delay by planning area and region. If None, calculate it using internal method.
+            OD_tripVol (pd.DataFrame): hourly average trip volume from origin to destination pt codes
+            travel_time_delay_df (pd.DataFrame): travel time delay_df from calling method compute_travel_time_delay()
         """
-        if travelTimeDelay_districts_df is None:
+        if travel_time_delay_df is None:
             # get stats of travel time delay
-            travelTimeDelay_districts_df = self.get_stats_travel_time_delay()
+            travel_time_delay_df = self.compute_travel_time_delay()
+        delay_index = travel_time_delay_df[travel_time_delay_df['travel_time_delay']>0].index
+        # filter rows to get rows for delayed only
+        delayed_df_dict = {df_name: df.loc[delay_index,:] for df, df_name in zip([self.flooded_df, self.dry_df],['flood','dry'])}
+        # convert bus duration to numpy array, and calculate travel time delay
+        delay_arrays = {df_name: df['simulated_bus_duration'].str.split(',', expand=True).astype(float).to_numpy() for df_name, df in delayed_df_dict.items()}
+        # calculate travel time delay (flood will have longer travel time)
+        delay_arr = delay_arrays['flood'] - delay_arrays['dry']
+        # convert bus codes to arrays
+        origin_arr = delayed_df_dict['flood']['ORIGIN_PT_CODE'].str.split(',',expand=True).values
+        destination_arr = delayed_df_dict['flood']['DESTINATION_PT_CODE'].str.split(',',expand=True).values
+        assert delay_arr.shape==origin_arr.shape==destination_arr.shape, "array shapes of bus routes number and bus stop ids must be the same"
+        
+        # get index where travel time delay for each individual bus route is > 0
+        # use nonzero such that it can be used to index an array, argwhere output cannot be used for indexing
+        # identifies which bus route experiences travel time delay and return the corresponding index
+        # delay row index corresponds to the row index of the delayed_df
+        delay_row_idx, delay_col_idx = np.nonzero(delay_arr>0)#np.argwhere(delay_arr>0)
+        # identify the OD bus stop ID for the bus route that experiences delay
+        origin_delay_id = origin_arr[delay_row_idx, delay_col_idx]
+        destination_delay_id = destination_arr[delay_row_idx, delay_col_idx]
+        # identify the travel time delay where values > 0
+        delay_arr = delay_arr[delay_row_idx, delay_col_idx]
+        assert origin_delay_id.shape == destination_delay_id.shape == delay_arr.shape, "array shapes of origin and destination bus stop ids must be the same"
+        # create a df to merge with OD df later
+        tripVol = pd.DataFrame({'delay_row_index': delay_row_idx,'simulated_bus_delay':delay_arr,
+                                'ORIGIN_PT_CODE':origin_delay_id,'DESTINATION_PT_CODE':destination_delay_id})
+        # merge with OD_hourly avg based on ORIGIN and DESTINATION pt code columns
+        tripVol = tripVol.merge(OD_tripVol,how="inner") # possible that some rows will not have a corresponding OD trip vol and thus dropped out
+        stats_c = ['mean','min', '25%', '50%', '75%','max'] # column names that have the trip volume values
+        for c in stats_c:
+            tripVol[f"potential_total_{c}_delay"] = tripVol['simulated_bus_delay']*tripVol[c]
+        # group by delay row index to get the sum of total delay for each trip
+        tripVol = tripVol.groupby('delay_row_index').sum(numeric_only=True).reset_index().set_index('delay_row_index')
+        # merge it with travel time delay
+        delay_df = travel_time_delay_df.loc[delay_index,:].reset_index()
+        # # include simulated bus delay as a sanity check to see if it matches with travel time delay column
+        columns_select = [c for c in tripVol.columns if bool(re.search("^potential.*|simulated_bus_delay",c))]
+        # join by index (inner join by default)
+        delay_df = pd.merge(delay_df,tripVol[columns_select], left_index=True,right_index=True)
+        # a sanity check would be to call delay_df[~delay_df['travel_time_delay'].ge(delay_df['simulated_bus_delay'])]
+        # to check if travel time delay column matches with simulated bus delay columns
+        return delay_df
 
     def plot_travel_time_delay_stats(self, travelTimeDelay_districts_df = None,
                                     selected_planningArea=['TAMPINES','JURONG EAST','WOODLANDS','DOWNTOWN CORE','SELETAR'],
