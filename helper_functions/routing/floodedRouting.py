@@ -466,6 +466,7 @@ class TravelTimeDelay:
     
     def get_potential_car_time_delay(self,trafficVol,travelTimeDelay_districts_df = None):
         """   get potential total travel time delay based on the road with the highest max traffic volume
+        calculates the total travel time delay for cars travelling from region to planning area
         Args:
             trafficVol (pd.DataFrame): traffic volume from region to planning area
             travelTimeDelay_districts_df (pd.DataFrame): dataframe that summarises the statistics of travel time delay by planning area and region. If None, calculate it using internal method.
@@ -492,10 +493,43 @@ class TravelTimeDelay:
 
         return trafficVol_stats
     
-    def get_potential_publicTransit_time_delay(self,OD_tripVol, travel_time_delay_df=None):
+    def get_publicTransit_volume(self,delay_df,spatialTravelPatterns):
+        """ Summarise the delay by planning area and region by aggregating all travel time delay from public transit
+        Args:
+            delay_df (pd.DataFrame): df that calculates entry-wise total travel time delay from affected bus routes and the corresponding OD bus trips
+            spatialTravelPatterns (pd.DataFrame): df that describes the number of commuters travelling from region to planning area via transport modes
+        Returns:
+            pd.DataFrame: aggregated total travel time for each planning area and region, scaled back by the spatial travel patterns, because the OD trip volume double counts individuals
+        """
+        time_delay_columns = [c for c in delay_df.columns if re.search("^potential.*|.*traffic_vol|simulated_bus_delay",c)]
+        stats_c = ['mean','min', '25%', '50%', '75%','max']
+        # sum all travl time delay by end_PLN_AREA_N and start_REGION_N
+        delay_df = delay_df.groupby([self.end_groupby,self.start_groupby])[time_delay_columns].sum().reset_index()
+        # merge based on end_PLN_AREA_N and start_REGION_N
+        delay_df = delay_df.merge(spatialTravelPatterns[[self.end_groupby,self.start_groupby,'Combinations of MRT/LRT or Public Bus']],how="inner")
+        # it is likely that trips from OD bus stop IDs are doublecounting the actual trips taken by individuals travelling from O to D
+        # because e.g. there are multiple entries from the same O with different D, and double count the same individuals who boarded at O
+        # to account for the double counting, we need to scale back the number of trips based on the actual spatial travel patterns
+        def scale_travel_time(row,stats_c):
+            d = dict()
+            for c in stats_c:
+                # the problem with this is that if spatialtravelpatterns > traffic_vol, 
+                # spatialTravelPatterns/trafficVol>1, total travel time of a lower percentile will have higher total travel time 
+                # esp if travel time delay is the same or similar with travel delay from a higher percentle
+                # so this method can only be applied if traffic volume is constant, suggest to use max_traffic_vol to scale back
+                # which is to scale back entries with unreasonably high traffic vol e.g. max traffic vol
+                d[f"potential_total_{c}_delay"] = (row['Combinations of MRT/LRT or Public Bus']/row[f"max_traffic_vol"])*row[f"potential_total_{c}_delay"]
+
+            return pd.Series(d,index=list(d))
+        # overwrite the potential total* delay columns
+        delay_df[[f"potential_total_{c}_delay" for c in stats_c]] = delay_df.apply(lambda x: scale_travel_time(x,stats_c),axis=1)
+        return delay_df
+    
+    def get_potential_publicTransit_time_delay(self,OD_tripVol, spatialTravelPatterns,travel_time_delay_df=None):
         """   get potential total travel time delay based on the commuter trip volume
         Args:
             OD_tripVol (pd.DataFrame): hourly average trip volume from origin to destination pt codes
+            spatialTravelPatterns (pd.DataFrame): df that describes the number of commuters travelling from region to planning area via transport modes
             travel_time_delay_df (pd.DataFrame): travel time delay_df from calling method compute_travel_time_delay()
         """
         if travel_time_delay_df is None:
@@ -531,17 +565,20 @@ class TravelTimeDelay:
         tripVol = tripVol.merge(OD_tripVol,how="inner") # possible that some rows will not have a corresponding OD trip vol and thus dropped out
         stats_c = ['mean','min', '25%', '50%', '75%','max'] # column names that have the trip volume values
         for c in stats_c:
+            tripVol[f"{c}_traffic_vol"] = tripVol[c]
             tripVol[f"potential_total_{c}_delay"] = tripVol['simulated_bus_delay']*tripVol[c]
         # group by delay row index to get the sum of total delay for each trip
         tripVol = tripVol.groupby('delay_row_index').sum(numeric_only=True).reset_index().set_index('delay_row_index')
         # merge it with travel time delay
         delay_df = travel_time_delay_df.loc[delay_index,:].reset_index()
         # # include simulated bus delay as a sanity check to see if it matches with travel time delay column
-        columns_select = [c for c in tripVol.columns if bool(re.search("^potential.*|simulated_bus_delay",c))]
+        columns_select = [c for c in tripVol.columns if bool(re.search("^potential.*|.*_traffic_vol|simulated_bus_delay",c))]
         # join by index (inner join by default)
         delay_df = pd.merge(delay_df,tripVol[columns_select], left_index=True,right_index=True)
         # a sanity check would be to call delay_df[~delay_df['travel_time_delay'].ge(delay_df['simulated_bus_delay'])]
         # to check if travel time delay column matches with simulated bus delay columns
+        # scale the calculated total travel time by the actual number of spatial travel patterns from region to planning area
+        delay_df = self.get_publicTransit_volume(delay_df,spatialTravelPatterns)
         return delay_df
 
     def plot_travel_time_delay_stats(self, travelTimeDelay_districts_df = None,
@@ -924,3 +961,268 @@ def fetch_data(save_dir,transport_mode,routing=True, stats=True):
         fps['stats'] = stats_fp
     
     return fps
+
+class PlotTravelTimeDelay:
+    def __init__(self, flood_routing_fps,dry_routing_fp,
+                 flood_stats_fps, planningArea, units="seconds",
+                 start_groupby='start_REGION_N',end_groupby='end_PLN_AREA_N',
+                 selected_planningArea=['TAMPINES','JURONG EAST','WOODLANDS','DOWNTOWN CORE','SELETAR']):
+        """   
+        Args:
+            flood_routing_fps (list of str): list of filepaths of flooded dfs
+            dry_routing_fp (str): filepath of non-flooded df
+            dry_routing_fp (str): filepath of stats df
+            planningArea (gpd.GeoDataframe): planning area shape file
+            units (str): "seconds" or "hours" for travel time to be displayed
+            selected_planningArea (list): if None, plot all planning area. Else, list of planning areas to be plotted
+        """
+        self.flood_routing_fps = flood_routing_fps
+        self.dry_routing_fp = dry_routing_fp
+        self.flood_stats_fps = flood_stats_fps
+        self.planningArea = planningArea
+        self.units = units
+        self.start_groupby = start_groupby
+        self.end_groupby = end_groupby
+        self.selected_planningArea = selected_planningArea
+
+    def get_potential_car_time_delay(self,maxTrafficVol):
+        """   Concat all potential car time delay dfs together in one df and make key the simulation assumption
+        Args:
+            maxTrafficVol (pd.DataFrame): traffic volume from region to planning area
+        """
+        potential_time_delay_dict = dict()
+        dry_df = pd.read_csv(self.dry_routing_fp)
+        for i in range(len(self.flood_stats_fps)):
+            fn = os.path.splitext(os.path.basename(self.flood_stats_fps[i]))[0].split('_')[-1]
+            travelTimeDelay_stats_df = pd.read_csv(self.flood_stats_fps[i])
+            # print(travelTimeDelay_stats_df.columns)
+
+            flooded_df = pd.read_csv(self.flood_routing_fps[i])
+
+            TTD = TravelTimeDelay(flooded_df,dry_df,self.planningArea,
+                                                        column_value="simulated_total_duration",
+                                                        end_groupby=self.end_groupby,
+                                                        start_groupby=self.start_groupby)
+            potential_time_delay = TTD.get_potential_car_time_delay(maxTrafficVol,travelTimeDelay_stats_df)
+            potential_time_delay_dict[fn] = potential_time_delay# drop index column
+
+        # concat all dataframes and use dict keys as keys
+        potential_time_delay_dict = pd.concat(potential_time_delay_dict.values(),keys=list(potential_time_delay_dict)).reset_index(names=["simulation_assumption","index"])
+        # print("df columns: ",potential_time_delay_dict.columns)
+        
+        return potential_time_delay_dict
+    
+    def get_potential_publicTransit_time_delay(self,OD_tripVol, spatialTravelPatterns):
+        """  
+        Args:
+            OD_tripVol (pd.DataFrame): hourly average trip volume from origin to destination pt codes
+            spatialTravelPatterns (pd.DataFrame): df that describes the number of commuters travelling from region to planning area via transport modes
+        """
+        potential_time_delay_dict = dict()
+        dry_df = pd.read_csv(self.dry_routing_fp)
+        for fp in self.flood_routing_fps:
+            flooded_df = pd.read_csv(fp)
+            fn = os.path.splitext(os.path.basename(fp))[0].split('_')[-1]
+            print(fn)
+            TTD = TravelTimeDelay(flooded_df,dry_df,self.planningArea,
+                                            column_value="simulated_total_duration",
+                                            end_groupby=self.end_groupby,
+                                            start_groupby=self.start_groupby)
+
+            # compute travel time delay by comparing the difference in dry_df and flooded_df
+            travel_time_delay_df = TTD.compute_travel_time_delay()
+            # print("Length of travel time delay df: ", len(travel_time_delay_df))
+            potential_time_delay = TTD.get_potential_publicTransit_time_delay(OD_tripVol,spatialTravelPatterns,travel_time_delay_df)
+            potential_time_delay_dict[fn] = potential_time_delay# drop index column
+        
+        # concat all dataframes and use dict keys as keys
+        potential_time_delay_dict = pd.concat(potential_time_delay_dict.values(),keys=list(potential_time_delay_dict)).reset_index(names=["simulation_assumption","index1"])
+        
+        return potential_time_delay_dict
+    
+    def get_time_delay_sum(self, potential_time_delay, var = "mean"):
+        """   sum up travel time delay across the regions to find the whole-island wide travel time delay to the respective planning areas
+        Args:
+            potential_time_delay (pd.DataFrame): output from calling method: get_potential_*_time_delay
+            var (str): determine which stat variable in the column to pick e.g. min, mean, max, 25%, 50%, 75%
+        """
+        def ensemble_mean(row):
+            d = dict()
+            d['mean_total_time_delay'] = row[f'potential_total_{var}_delay'].mean()
+            d['min_total_time_delay'] = row[f'potential_total_{var}_delay'].min()
+            d['max_total_time_delay'] = row[f'potential_total_{var}_delay'].max()
+            return pd.Series(d,index=list(d))
+        
+        # get the ensemble mean across different model assumptions
+        time_delay_sum = potential_time_delay.groupby([self.end_groupby,self.start_groupby]).apply(lambda x: ensemble_mean(x)).reset_index()
+        # sum up total travel time delay across all the regions
+        time_delay_sum = time_delay_sum.groupby(self.end_groupby).sum().reset_index()
+        return time_delay_sum
+    
+    def get_plot_params(self):
+        """   get plotting helpers
+        Returns:
+            tuple: tuple of color mapping for simulation assumption, marker mapping for stats, legend label adjustment
+        """
+        assum_dict = {'maxspeed5': 'maroon',
+                    'maxspeed10': 'tomato', 
+                    'maxspeed20': 'darkorange', 
+                    'percReducMaxspeed10': 'forestgreen',
+                    'percReducMaxspeed20': 'lightseagreen', 
+                    'percReducMaxspeed50': 'dodgerblue',
+                    'percReducMaxspeed80': 'royalblue'}
+        
+        marker_dict = {'potential_total_mean_delay':'*',
+                            'potential_total_min_delay':'v',
+                            'potential_total_25%_delay': 'o',
+                            'potential_total_50%_delay':'s',
+                            'potential_total_75%_delay':'P',
+                            'potential_total_max_delay':'^'}
+        # multiple string replacement for legend labels
+        str_replace = {'maxspeed': 'Max speed (km/h) = ',
+                    'percReducMaxspeed': 'Max speed reduction (%) = ',
+                    'potential_total_':'',
+                    '%': 'th percentile',
+                    '_':' '
+                    }
+        return assum_dict, marker_dict, str_replace
+    
+    def plot_potential_time_delay(self,potential_time_delay,time_delay_sum,
+                                  title="",loc = (0.1, 0.05),
+                                  title_fontsize = 16,axis_fontsize=14,
+                                  save_fp = None):
+        """   Plots the travel time delay for all simulation assumptions for each region and planning area, and calculates the total mean travel time delay
+        Args:
+            potential_time_delay (pd.DataFrame): output from calling method: get_potential_*_time_delay()
+            time_delay_sum (pd.DataFrame): output from calling method: get_time_delay_sum()
+            plotting_params (tuple): tuple of color mapping for simulation assumption, marker mapping for stats, legend label adjustment
+            title (str): title for plot
+            save_fp (str): file path to save figure to
+        """
+        # convert units if necessary
+        if self.units == "hours":
+            # conversion to seconds to hours
+            # find columns with delays
+            delay_columns = [c for c in potential_time_delay.columns if bool(re.search("^potential.*_delay$",c))]
+            potential_time_delay[delay_columns] = potential_time_delay[delay_columns].apply(lambda x: x/3600)
+            delay_columns = [c for c in time_delay_sum.columns if bool(re.search(".*total_time_delay$",c))]
+            time_delay_sum[delay_columns] = time_delay_sum[delay_columns].apply(lambda x: x/3600)
+        # filter planning areas if necessary
+        if self.selected_planningArea is not None:
+            potential_time_delay = potential_time_delay[potential_time_delay[self.end_groupby].isin(self.selected_planningArea)]
+            time_delay_sum = time_delay_sum[time_delay_sum[self.end_groupby].isin(self.selected_planningArea)]
+        # pln_areas = potential_time_delay['PLN_AREA_N'].unique()
+        regions = potential_time_delay[self.start_groupby].unique()
+        simulation_assumptions = potential_time_delay['simulation_assumption'].unique()
+        
+        # plotting_dict = {region: {pln_area: dict() for pln_area in pln_areas} for region in regions}
+        time_delay_columns = [c for c in potential_time_delay.columns if re.search(f"{self.end_groupby}|{self.start_groupby}|^potential.*|simulation_assumption",c)]
+        
+        time_delay_region = {k:df for k,df in potential_time_delay[time_delay_columns].groupby([self.start_groupby,'simulation_assumption'])}
+        # potential_time_delay_columns = [c for c in potential_time_delay.columns if re.search("^potential.*",c)]
+        
+        # plotting helpers
+        assum_dict, marker_dict, str_replace = self.get_plot_params()
+        # modify axis title
+        ax_text_style = dict(horizontalalignment='center', verticalalignment='center',
+                        fontsize=axis_fontsize,weight='bold')
+        n_assum = len(simulation_assumptions)
+        y_step = n_assum + 2 # plot line every y_step interval
+
+        ncols = len(regions) + 1 # use alst column to show total
+        fig, axes = plt.subplots(1,ncols,figsize=(ncols*4,10),sharey=True,sharex=True)
+        # get max x limit
+        max_xlimit = 0
+        # iterate plotting of regions by axes
+        for ax, region in zip(axes.flatten()[:-1],regions):
+            # plotting of model assumptions in each axis
+            for i, (sim_assum,assum_color) in enumerate(assum_dict.items()):
+                df = time_delay_region[(region,sim_assum)]
+                df_dict = df.to_dict(orient='list')
+                # assume that PLN_AREA are all arranged in sequence and exists in all dfs
+                
+                marker_style = dict(linestyle='None', color='0.8', markersize=6,
+                                markerfacecolor=assum_color, markeredgecolor="black",alpha=0.5)
+                line_style = dict(ecolor=assum_color,elinewidth=2,alpha=0.5)
+                # plot error bar (horizontal straight lines joining up the points)
+                min_error_bar = df['potential_total_min_delay'].values
+                max_error_bar = df['potential_total_max_delay'].values
+                if max_error_bar.max() > max_xlimit:
+                    max_xlimit = max_error_bar.max()
+                mean_val = np.column_stack([min_error_bar,max_error_bar]).mean(axis=1)
+                xerr = max_error_bar - mean_val
+
+                # plot horizontal lines connecting the markers
+                y_label = df_dict[self.end_groupby]
+                # print(y_label)
+                y_list = np.arange(start=i,stop=(y_step)*len(y_label),step=y_step)
+                # y_list = [l*(n_assum+2)+i for l in list(range(len(y_label)))]
+                x_list = df['potential_total_mean_delay'].values
+                ax.errorbar(mean_val, y_list, xerr=xerr, fmt='none',**line_style)
+
+                # plot individual markers
+                for column, marker in marker_dict.items():
+                    x_list = df_dict[column]
+                    ax.plot(x_list,y_list,marker=marker,**marker_style)
+                
+                y_tick_locations = np.arange(start=0,stop=(y_step)*len(y_label),step=y_step) + n_assum//2
+                ax.set_yticks(y_tick_locations, y_label, fontsize=axis_fontsize)
+                
+                # ax.set_xticks(ax.get_xticks(), ax.get_xticklabels(), rotation=45, ha='right',fontsize=10)
+                ax.invert_yaxis() # labels read top-to-bottom
+                if self.units == "seconds":
+                    ax.set_xlabel("Potential travel time delay (s)")
+                elif self.units == "hours":
+                    ax.set_xlabel("Potential travel time delay (h)")
+                ax.set_title(region, **ax_text_style)
+        
+        # sum of stats for last axes
+        # add error bars
+        bar_style = dict(color="lightgrey",edgecolor="black",linewidth=2.5,ecolor="black",capsize=5)
+        low_err = time_delay_sum['mean_total_time_delay']-time_delay_sum['min_total_time_delay']
+        high_err = time_delay_sum['max_total_time_delay']-time_delay_sum['mean_total_time_delay']
+        if high_err.max() > max_xlimit:
+            max_xlimit = high_err.max()
+        xerr = [low_err,high_err]
+        # print(y_tick_locations,len(time_delay_sum['mean_total_time_delay']),len(low_err))
+        axes[-1].barh(y_tick_locations,time_delay_sum['mean_total_time_delay'],xerr=xerr,
+                    height=3,left=0,error_kw={"marker":"*"},**bar_style)
+        axes[-1].set_title("Aggregated regions", **ax_text_style)
+        if self.units == "seconds":
+            axes[-1].set_xlabel("Potential mean travel time delay (s)")
+        elif self.units == "hours":
+            axes[-1].set_xlabel("Potential mean travel time delay (h)")
+        
+        # format axis
+        for ax_ix, ax in enumerate(axes.flatten()):
+            # set x limit
+            ax.set_xlim(0,max_xlimit)
+            # rotate xtick labels for all axes
+            ax.set_xticks(ax.get_xticks(), ax.get_xticklabels(), rotation=45, ha='right',fontsize=10)
+        axes[0].set_ylabel("Planning Area Work Destinations")
+        # create cax to add colorbar to the figure
+        fig.subplots_adjust(bottom=0.2)
+        # add legend
+        # add legends for sim assum
+        # refine legend labels
+
+        def multiple_replace(replacements, text):
+            # Create a regular expression from the dictionary keys
+            regex = re.compile("(%s)" % "|".join(map(re.escape, replacements.keys())))
+            # For each match, look-up corresponding value in dictionary
+            return regex.sub(lambda mo: replacements[mo.group()], text) 
+        
+        handles = [Line2D([0], [0], color=assum_color, label=multiple_replace(str_replace,assum_name),lw=2.5) for assum_name,assum_color in assum_dict.items()]
+        # add legends for markers
+        handles_markers = [Line2D([0], [0], color="k", marker=m, label=multiple_replace(str_replace,n),lw=0.5) for n,m in marker_dict.items()]
+        handles = handles+handles_markers
+        # reorder legend by row instead of column        
+        fig.legend(handles=plot_utils.reorder_legend(handles,n_assum),loc=loc, ncol=n_assum, fontsize='medium')
+        title_text_style = dict(horizontalalignment='center', verticalalignment='center',
+                        fontsize=title_fontsize,weight='bold')
+        fig.suptitle(title,y=0.95,**title_text_style)
+        if save_fp is not None:
+            plt.savefig(save_fp, bbox_inches = 'tight')
+        plt.show()
+
+        return 
