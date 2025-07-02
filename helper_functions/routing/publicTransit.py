@@ -5,6 +5,9 @@ import geopandas as gpd
 import os
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+from matplotlib import patheffects
+import polyline
+from shapely.geometry import LineString
 import osmnx as ox
 import networkx as nx
 import importlib
@@ -379,6 +382,103 @@ def plot_routes(G,routes,lat_iterable,lon_iterable,ax=None, xlim_factor = 0.2,yl
     ax.set_ylim(min_lat-ylim_factor*delta_lat,max_lat+ylim_factor*delta_lat)
     ax.set_xlim(min_lon-xlim_factor*delta_lon,max_lon+xlim_factor*delta_lon)
     return fig, ax
+
+def plot_bus_routes(G,itinerary_fp,planningArea, shift_x, shift_y,
+                    flooded_edges=None,ax=None,
+                    cmap="plasma",plot_groundtruth=True,fontsize=15,linewidth=3,title="",
+                    save_fp = None):
+    """   Plot indivdual bus routes with unique colors, showing bus route ID
+    TO decode polyline, can use https://developers.google.com/maps/documentation/utilities/polylineutility
+    or python package: https://github.com/frederickjansen/polyline
+    Args:
+        G (G): driving route
+        itinerary_fp (str): filepath of the itinerary
+        planningArea (gpd.GeoDataFrame): geopandas df of planning areas of SG
+        shift_x (list of float): longitude shifts to plot the arrows
+        shift_y (list of float): latitude shifts to plot the arrows
+        flooded_edges (list of edges): each item in this list is an edge e.g. (u,v, key)
+        ax (mpl.Axes): if None, plot on a new figure, else, plot on supplied ax
+        cmap (str): Colors that are assigned to individual bus route shall be sampled from plasma. see mpl colormap_reference
+        plot_groundtruth (bool): if True, plot the polyline from OneMap
+        fontsize (float): fontsize of bus route service ID
+        title (str): title for plot
+        save_fp (str): file path to save figure to
+    """
+    # load itinerary
+    itinerary = utils.load_json(itinerary_fp)
+    # get colormap
+    cmap = mpl.colormaps[cmap]
+    # get unique colors based on number of bus legs
+    colors = cmap(np.linspace(0,1, len(itinerary['busLegs'])))
+    # plot base map
+    if ax is None:
+        fig, ax = ox.plot_graph(
+            G,node_size=0,edge_linewidth=0.5,
+            bgcolor="white",
+            show = False,
+            close = False
+        )
+    # plot planning area boundary
+    planningArea.plot(fc="None",ec="lightgrey",alpha=0.7,ax=ax,linewidth=2)
+    # flooded edges gdf
+    edges_gdf = ox.graph_to_gdfs(G,nodes=False)
+    flooded_edges_gdf = edges_gdf.loc[flooded_edges,:]
+    flooded_edges_gdf.plot(ax=ax,color="blue")
+    # store the lat and lon to set the xlim and ylim later
+    lons = []
+    lats = []
+    # plot each bus leg
+    for ix,busLeg in enumerate(itinerary['busLegs']):
+        routesNodesID = busLeg['routesNodesID']
+        color = colors[[ix],:]
+        ox.plot_graph_route(G, routesNodesID, node_size=0, 
+                            ax=ax,show=False,close=False,
+                            route_color=color, route_linewidth=linewidth)
+        # get groundtruth route
+        polyline_str = busLeg['legGeometry']['points']
+        route_geojson = polyline.decode(polyline_str,geojson=True)
+        line = LineString(route_geojson)
+        line_gdf = gpd.GeoSeries(line,crs = 4326)
+        if plot_groundtruth:
+            line_gdf.plot(color="green",alpha=0.7,ax=ax)
+        # add route bounds
+        lon_iterable = [r[0] for r in route_geojson]
+        lat_iterable = [r[1] for r in route_geojson]
+        lons.extend(lon_iterable)
+        lats.extend(lat_iterable)
+        # bus service
+        print(busLeg['routeId'])
+        # add annotations
+        # text, end_coord (x,y), start_coord (x,y)
+        dy = max(lat_iterable) - min(lat_iterable)
+        xy_start = (busLeg['busLeg'][0]['lon'], busLeg['busLeg'][0]['lat'])
+        shiftx = shift_x[ix]
+        shifty = shift_y[ix]
+        # shift = dy if bool(ix%2) else -dy # so the y placement of the text alternates
+        xy_end = (busLeg['busLeg'][0]['lon'] + shiftx, busLeg['busLeg'][0]['lat'] + shifty)
+        txt = ax.annotate(text=busLeg['routeId'], xy=xy_start, xytext=xy_end,xycoords='data',color="k",
+                                arrowprops=dict(arrowstyle="->",connectionstyle="angle3", lw=1.5,color="k"),
+                                ha="center", fontsize=fontsize,
+                                path_effects=[patheffects.withStroke(linewidth=3,
+                                                    foreground=color)])
+        txt.arrow_patch.set_path_effects([
+            patheffects.Stroke(linewidth=3, foreground=color),
+            patheffects.Normal()])
+
+    # add black border around axis
+    ax.patch.set_edgecolor('black')  
+    ax.patch.set_linewidth(2) 
+    # set limit
+    min_lat, max_lat, delta_lat, min_lon, max_lon, delta_lon = get_bus_lims(np.array(lats),np.array(lons))
+    print(delta_lat,delta_lon)
+    ax.set_ylim(min_lat-0.5*delta_lat,max_lat+0.5*delta_lat)
+    ax.set_xlim(min_lon-0.5*delta_lon,max_lon+0.5*delta_lon)
+    ax.set_title(title)
+    if save_fp is not None:
+        plt.savefig(save_fp, bbox_inches = 'tight')
+    if ax is None:
+        plt.show()
+    return 
 
 def public_transit_routing(origin_coord, origin_key, destination_coord, destination_key,
                            G_bus, GTFS_shapes, headers,

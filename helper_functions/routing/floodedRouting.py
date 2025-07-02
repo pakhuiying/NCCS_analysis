@@ -659,7 +659,7 @@ class TravelTimeDelay:
             ax.invert_yaxis() # labels read top-to-bottom
             ax.set_title(region,**ax_text_style)
             ax.set_xlabel("Travel time delay (s) for affected routes")
-        fig.suptitle(title)
+        fig.suptitle(title,**ax_text_style)
         plt.tight_layout()
         if save_fp is not None:
             plt.savefig(save_fp, bbox_inches = 'tight')
