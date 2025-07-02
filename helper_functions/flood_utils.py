@@ -7,6 +7,7 @@ import os
 import datetime
 from osgeo import gdal, ogr
 import requests
+from LTA_API_key import get_OneMap_token
 
 def get_weather_stns():
     """ returns weather stations in singapore
@@ -39,17 +40,21 @@ def grid_code_drainage_catchment():
     return {1: 'Jurong', 2: 'Kranji', 3: 'Pandan', 4: 'Woodlands', 5: 'Kallang', 6: 'Bukit Timah'
             , 7: 'Stamford Marina', 8: 'Singapore River', 9: 'Punggol', 10: 'Geylang', 11: 'Changi'}
 
-def get_coordinates_from_location(location):
+def generate_OneMap_token():
+    """ generates new one map token """
+    onemapKey = get_OneMap_token()
+    headers = {"Authorization": onemapKey}
+    return headers
+
+def get_coordinates_from_location(location,headers):
     """returns number of results found, search value, and coordinates given a supplied location 
     Args:
         location (str): a location in singapore
+        headers (str): call function generate_OneMap_token() to get headers
     Returns:
         tuple: strings corresponding to number of results found, search value, lat, and lon
     """
-    
-    headers = {"Authorization": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZWY3ZDlhYTRkNDIyMWVjYjA2NzE2MTg0Yjc3MmU5ZCIsImlzcyI6Imh0dHA6Ly9pbnRlcm5hbC1hbGItb20tcHJkZXppdC1pdC0xMjIzNjk4OTkyLmFwLXNvdXRoZWFzdC0xLmVsYi5hbWF6b25hd3MuY29tL2FwaS92Mi91c2VyL3Bhc3N3b3JkIiwiaWF0IjoxNzI1Njg0NDE4LCJleHAiOjE3MjU5NDM2MTgsIm5iZiI6MTcyNTY4NDQxOCwianRpIjoiMnZuS0FHQ3FkdzVwRHpFRiIsInVzZXJfaWQiOjQ1NDcsImZvcmV2ZXIiOmZhbHNlfQ.pl1b-XkwgvBjdp-gczsdx17OoSLlGvrsAjfgUTeqY7M"}
-    url = f"https://www.onemap.gov.sg/api/common/elastic/search?searchVal={location}&returnGeom=Y&getAddrDetails=Y"
-        
+    url = f"https://www.onemap.gov.sg/api/common/elastic/search?searchVal={location}&returnGeom=Y&getAddrDetails=Y"   
     response = requests.request("GET", url, headers=headers)
     response = response.json()
     response_found = response['found'] # number of results found
