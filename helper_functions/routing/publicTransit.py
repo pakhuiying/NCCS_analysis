@@ -385,7 +385,12 @@ def plot_routes(G,routes,lat_iterable,lon_iterable,ax=None, xlim_factor = 0.2,yl
 
 def plot_bus_routes(G,itinerary_fp,planningArea, shift_x, shift_y,
                     flooded_edges=None,ax=None,
-                    cmap="plasma",plot_groundtruth=True,fontsize=15,linewidth=3,title="",
+                    cmap="plasma", alpha=0.7,
+                    flooded_edge_color="royalblue",
+                    groundtruth_edge_color = "green",
+                    plot_osmnx=True,
+                    plot_groundtruth=True,
+                    fontsize=15,linewidth=3,markersize=10,title="",
                     save_fp = None):
     """   Plot indivdual bus routes with unique colors, showing bus route ID
     TO decode polyline, can use https://developers.google.com/maps/documentation/utilities/polylineutility
@@ -423,7 +428,7 @@ def plot_bus_routes(G,itinerary_fp,planningArea, shift_x, shift_y,
     # flooded edges gdf
     edges_gdf = ox.graph_to_gdfs(G,nodes=False)
     flooded_edges_gdf = edges_gdf.loc[flooded_edges,:]
-    flooded_edges_gdf.plot(ax=ax,color="blue")
+    flooded_edges_gdf.plot(ax=ax,color=flooded_edge_color)
     # store the lat and lon to set the xlim and ylim later
     lons = []
     lats = []
@@ -431,16 +436,27 @@ def plot_bus_routes(G,itinerary_fp,planningArea, shift_x, shift_y,
     for ix,busLeg in enumerate(itinerary['busLegs']):
         routesNodesID = busLeg['routesNodesID']
         color = colors[[ix],:]
-        ox.plot_graph_route(G, routesNodesID, node_size=0, 
-                            ax=ax,show=False,close=False,
-                            route_color=color, route_linewidth=linewidth)
+        if plot_osmnx:
+            ox.plot_graph_route(G, routesNodesID, node_size=0, 
+                                ax=ax,show=False,close=False,
+                                route_color=color, route_linewidth=linewidth)
         # get groundtruth route
         polyline_str = busLeg['legGeometry']['points']
         route_geojson = polyline.decode(polyline_str,geojson=True)
         line = LineString(route_geojson)
         line_gdf = gpd.GeoSeries(line,crs = 4326)
         if plot_groundtruth:
-            line_gdf.plot(color="green",alpha=0.7,ax=ax)
+            # plot route
+            line_gdf.plot(color=groundtruth_edge_color,ax=ax, linewidth=linewidth)
+            # plot route border
+            line_gdf.plot(color=color,ax=ax, linewidth=linewidth*1.5,alpha=alpha)
+            busStartStopPts = gpd.points_from_xy(x=[busLeg['busLeg'][0]['lon'],busLeg['busLeg'][-1]['lon']],
+                               y=[busLeg['busLeg'][0]['lat'],busLeg['busLeg'][-1]['lat']],
+                               crs=4326)
+            busStartStopPts = gpd.GeoSeries(busStartStopPts)
+            # plot bus start and stop points of route
+            busStartStopPts.plot(color=color,alpha=alpha,ax=ax, markersize=markersize)
+            
         # add route bounds
         lon_iterable = [r[0] for r in route_geojson]
         lat_iterable = [r[1] for r in route_geojson]

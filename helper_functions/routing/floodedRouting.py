@@ -563,6 +563,7 @@ class TravelTimeDelay:
                                 'ORIGIN_PT_CODE':origin_delay_id,'DESTINATION_PT_CODE':destination_delay_id})
         # merge with OD_hourly avg based on ORIGIN and DESTINATION pt code columns
         tripVol = tripVol.merge(OD_tripVol,how="inner") # possible that some rows will not have a corresponding OD trip vol and thus dropped out
+        assert len(tripVol) > 0, "tripVol length is 0 after merging. Likely that there are no common rows between tripVol and OD_tripVol"
         stats_c = ['mean','min', '25%', '50%', '75%','max'] # column names that have the trip volume values
         for c in stats_c:
             tripVol[f"{c}_traffic_vol"] = tripVol[c]
@@ -575,6 +576,7 @@ class TravelTimeDelay:
         columns_select = [c for c in tripVol.columns if bool(re.search("^potential.*|.*_traffic_vol|simulated_bus_delay",c))]
         # join by index (inner join by default)
         delay_df = pd.merge(delay_df,tripVol[columns_select], left_index=True,right_index=True)
+        assert len(delay_df) > 0, "delay_df length is 0 after merging with tripVol"
         # a sanity check would be to call delay_df[~delay_df['travel_time_delay'].ge(delay_df['simulated_bus_delay'])]
         # to check if travel time delay column matches with simulated bus delay columns
         # scale the calculated total travel time by the actual number of spatial travel patterns from region to planning area
@@ -1171,9 +1173,9 @@ class PlotTravelTimeDelay:
                 # ax.set_xticks(ax.get_xticks(), ax.get_xticklabels(), rotation=45, ha='right',fontsize=10)
                 ax.invert_yaxis() # labels read top-to-bottom
                 if self.units == "seconds":
-                    ax.set_xlabel("Potential travel time delay (s)")
+                    ax.set_xlabel("Travel time delay (s)", fontsize=axis_fontsize)
                 elif self.units == "hours":
-                    ax.set_xlabel("Potential travel time delay (h)")
+                    ax.set_xlabel("Travel time delay (h)", fontsize=axis_fontsize)
                 ax.set_title(region, **ax_text_style)
         
         # sum of stats for last axes
@@ -1189,17 +1191,17 @@ class PlotTravelTimeDelay:
                     height=3,left=0,error_kw={"marker":"*"},**bar_style)
         axes[-1].set_title("Aggregated regions", **ax_text_style)
         if self.units == "seconds":
-            axes[-1].set_xlabel("Potential mean travel time delay (s)")
+            axes[-1].set_xlabel("Travel time delay (s)", fontsize=axis_fontsize)
         elif self.units == "hours":
-            axes[-1].set_xlabel("Potential mean travel time delay (h)")
+            axes[-1].set_xlabel("Travel time delay (h)", fontsize=axis_fontsize)
         
         # format axis
         for ax_ix, ax in enumerate(axes.flatten()):
             # set x limit
             ax.set_xlim(0,max_xlimit)
             # rotate xtick labels for all axes
-            ax.set_xticks(ax.get_xticks(), ax.get_xticklabels(), rotation=45, ha='right',fontsize=10)
-        axes[0].set_ylabel("Planning Area Work Destinations")
+            ax.set_xticks(ax.get_xticks(), ax.get_xticklabels(), rotation=45, ha='right',fontsize=axis_fontsize-2)
+        # axes[0].set_ylabel("Planning Area Work Destinations", fontsize=axis_fontsize)
         # create cax to add colorbar to the figure
         fig.subplots_adjust(bottom=0.2)
         # add legend
@@ -1217,7 +1219,7 @@ class PlotTravelTimeDelay:
         handles_markers = [Line2D([0], [0], color="k", marker=m, label=multiple_replace(str_replace,n),lw=0.5) for n,m in marker_dict.items()]
         handles = handles+handles_markers
         # reorder legend by row instead of column        
-        fig.legend(handles=plot_utils.reorder_legend(handles,n_assum),loc=loc, ncol=n_assum, fontsize='medium')
+        fig.legend(handles=plot_utils.reorder_legend(handles,n_assum),loc=loc, ncol=n_assum, fontsize=axis_fontsize-3)
         title_text_style = dict(horizontalalignment='center', verticalalignment='center',
                         fontsize=title_fontsize,weight='bold')
         fig.suptitle(title,y=0.95,**title_text_style)
