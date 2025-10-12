@@ -68,7 +68,10 @@ def plot_colortable(colors, names, ncols=4, sort_colors=False):
     return 
 
 import matplotlib as mpl
-def get_colorbar(vmin,vmax,label="Units",cmap="plasma",orientation="horizontal", plot=True):
+def get_colorbar(vmin,vmax,label="Units",
+                 cmap="plasma",orientation="horizontal", 
+                 fontsize = 10,figsize=(6,1),extend=None,
+                 plot=True,save_fp=None):
     """ 
     Args:
         vmin (float): smallest value to be mapped to the start of color map
@@ -78,6 +81,7 @@ def get_colorbar(vmin,vmax,label="Units",cmap="plasma",orientation="horizontal",
         orientation (str): orientation of colorbar e.g. horizontal, vertical
         plot (bool): if plot is True, plot colorbar
         ax (Ax or None): if ax is not None, plot colorbar next to existing Ax
+        extend (None or str): extend colorbar for pointed extremes: 'neither', 'both', 'min', 'max'
     """
 
     cmap = plt.get_cmap(cmap)
@@ -86,8 +90,12 @@ def get_colorbar(vmin,vmax,label="Units",cmap="plasma",orientation="horizontal",
     # cax = ax (meaning "draw the colorbar on ax")
     # ax = ax (display the colorbar next to a pre-existing Axes ax)
     if plot:
-        fig, ax = plt.subplots(figsize=(6, 1), layout='constrained')
-        fig.colorbar(cbar,cax=ax, orientation=orientation, label=label)
+        fig, ax = plt.subplots(figsize=figsize, layout='constrained')
+        clb = fig.colorbar(cbar,cax=ax, orientation=orientation,extend=extend)
+        clb.ax.tick_params(labelsize=fontsize)
+        clb.ax.set_title(label=label, fontsize=fontsize)
+        if save_fp is not None:
+            fig.savefig(save_fp)
     # else:
     #     fig.colorbar(cbar,ax=ax, orientation=orientation, label=label)
     return cbar

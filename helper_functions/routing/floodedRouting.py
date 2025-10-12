@@ -991,6 +991,8 @@ class PlotTravelTimeDelay:
         """   Concat all potential car time delay dfs together in one df and make key the simulation assumption
         Args:
             maxTrafficVol (pd.DataFrame): traffic volume from region to planning area
+        Returns:
+            time delay in seconds
         """
         potential_time_delay_dict = dict()
         dry_df = pd.read_csv(self.dry_routing_fp)
@@ -1019,6 +1021,8 @@ class PlotTravelTimeDelay:
         Args:
             OD_tripVol (pd.DataFrame): hourly average trip volume from origin to destination pt codes
             spatialTravelPatterns (pd.DataFrame): df that describes the number of commuters travelling from region to planning area via transport modes
+        Returns:
+            time delay in seconds
         """
         potential_time_delay_dict = dict()
         dry_df = pd.read_csv(self.dry_routing_fp)
